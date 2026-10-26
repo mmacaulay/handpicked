@@ -12,7 +12,9 @@ Read both before making design decisions. Stay within v1 scope unless asked; do 
 ## Stack
 
 - Python, managed with uv
-- SQLite for storage
+- SQLite for storage, via stdlib `sqlite3` with hand-written SQL (no ORM); migrations are numbered `.sql` files tracked with `PRAGMA user_version`
+- Config in YAML, validated with pydantic; long-running process with APScheduler
+- See "Technical decisions" in `docs/V1.md` for the reasoning
 - Packaged as a single Docker container, targeting Unraid
 - Integrations: Tautulli, TMDB, Seerr (not Overseerr). Radarr/Sonarr are possible future integrations, not used in v1.
 
