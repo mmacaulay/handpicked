@@ -14,7 +14,7 @@ Read both before making design decisions. Stay within v1 scope unless asked; do 
 - Python, managed with uv
 - SQLite for storage
 - Packaged as a single Docker container, targeting Unraid
-- Integrations: Tautulli, TMDB, Radarr, Sonarr, Seerr (not Overseerr)
+- Integrations: Tautulli, TMDB, Seerr (not Overseerr). Radarr/Sonarr are possible future integrations, not used in v1.
 
 ## Conventions
 
