@@ -1,0 +1,59 @@
+# Handpicked configuration. Copy to /config/config.yml (or set HANDPICKED_CONFIG).
+#
+# Secrets can come from the environment instead of this file; env values win:
+#   HANDPICKED_TAUTULLI_API_KEY, HANDPICKED_SEERR_API_KEY,
+#   HANDPICKED_TMDB_TOKEN, HANDPICKED_SMTP_PASSWORD
+
+services:
+  tautulli:
+    url: http://tautulli:8181
+    api_key: your-tautulli-api-key
+  seerr:
+    url: http://seerr:5055
+    api_key: your-seerr-api-key
+  tmdb:
+    token: your-tmdb-v4-read-token
+
+# Compute and report everything, write nothing to Seerr. On by default so a
+# fresh install is safe; set to false once the dry-run picks look right.
+dry_run: true
+
+# Cron expression for the run (default: Sundays at 09:00).
+schedule: "0 9 * * SUN"
+
+# Default picks per included user per run.
+picks_per_run: 3
+
+thresholds:
+  completion_pct: 80          # finished at or above this % counts as a seed
+  abandon_pct: 25             # stopped below this % counts as abandoned
+  seed_window_days: 90        # how far back seeds are taken from
+  min_seeds: 3                # users with fewer seeds are skipped
+  min_vote_count: 100         # ignore TMDB titles with fewer votes
+  tv_min_finished_episodes: 3 # finished episodes before a show is a seed
+  tv_abandon_weeks: 4         # weeks without returning before a show is abandoned
+
+# Users are opt-in: only users listed here with include: true get picks.
+# Keys are Plex usernames. Discovered users that are not included are listed
+# in the digest.
+users:
+  alex:
+    include: true
+  sam:
+    include: true
+    picks_per_run: 5
+  kid:
+    include: true
+    max_age: 10        # exclude titles rated above this age; unrated titles are excluded too
+    seerr_user_id: 7   # only for Plex Home managed accounts: the local Seerr user created for them
+
+# Weekly digest email to the admin. Optional until the digest is set up.
+# digest:
+#   host: smtp.example.com
+#   port: 587
+#   security: starttls   # starttls, ssl, or none
+#   username: handpicked@example.com
+#   password: your-smtp-password
+#   sender: handpicked@example.com
+#   recipients:
+#     - admin@example.com
