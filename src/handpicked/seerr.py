@@ -73,6 +73,10 @@ class Seerr:
             for request in self._paged("/request", {"filter": "all"})
         }
 
+    def request_ids(self) -> set[int]:
+        """Ids of every request in any status, except for blocklisted titles."""
+        return {request["id"] for request in self._paged("/request", {"filter": "all"})}
+
     def blocklisted(self) -> set[Title]:
         return {
             (item["mediaType"], item["tmdbId"]) for item in self._paged("/blocklist")
@@ -120,7 +124,10 @@ class Seerr:
         return request["id"]
 
     def request_status(self, request_id: int) -> int | None:
-        """The request's MediaRequestStatus, or None if it was deleted."""
+        """The request's MediaRequestStatus, or None on a 404.
+
+        Seerr answers 404 for any failed lookup, not only a deleted request.
+        """
         try:
             return self._get(f"/request/{request_id}")["status"]
         except SeerrError as e:

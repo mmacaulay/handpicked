@@ -99,3 +99,28 @@ def test_migration_without_trailing_semicolon(conn, migrations):
 
 def test_packaged_migrations_apply(conn):
     db.migrate(conn)
+
+
+def test_deleted_status_keeps_existing_suggestions(conn, migrations):
+    for entry in db.MIGRATIONS.iterdir():
+        if entry.name[:4] in {"0001", "0002", "0003", "0004"}:
+            (migrations / entry.name).write_text(entry.read_text())
+    db.migrate(conn, migrations)
+    with conn:
+        conn.execute("INSERT INTO users (user_id, username) VALUES (7, 'user7')")
+        conn.execute(
+            """
+            INSERT INTO suggestions (
+                user_id, media_type, tmdb_id, score, seeds, status,
+                seerr_request_id, proposed_at, requested_at, declined_at
+            ) VALUES (7, 'tv', 10, 1.5, '[]', 'declined', 41, 1, 2, 3)
+            """
+        )
+    before = dict(conn.execute("SELECT * FROM suggestions").fetchone())
+
+    db.migrate(conn)
+
+    after = dict(conn.execute("SELECT * FROM suggestions").fetchone())
+    assert after == {**before, "deleted_at": None}
+    with conn:
+        conn.execute("UPDATE suggestions SET status = 'deleted', deleted_at = 4")

@@ -168,7 +168,7 @@ def _run(
         changes = suggestions.sync(conn, seerr, now)
         print(
             f"Requests since last run: {changes['approved']} approved,"
-            f" {changes['declined']} declined"
+            f" {changes['declined']} declined, {changes['deleted']} deleted"
         )
 
     stats = ingest(conn, tautulli)

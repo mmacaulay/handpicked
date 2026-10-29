@@ -88,10 +88,7 @@ def request(
 
 
 def sync(conn: sqlite3.Connection, seerr: Seerr, now: int) -> Counter[str]:
-    """Record the admin's approvals and declines of open requests.
-
-    A request deleted in Seerr keeps its last known status.
-    """
+    """Record the admin's approvals, declines, and deletions of open requests."""
     changes: Counter[str] = Counter()
     rows = conn.execute(
         """
@@ -99,17 +96,33 @@ def sync(conn: sqlite3.Connection, seerr: Seerr, now: int) -> Counter[str]:
         WHERE status = 'requested' AND seerr_request_id IS NOT NULL
         """
     ).fetchall()
+    not_found = []
     for row in rows:
-        status = REVIEWED.get(seerr.request_status(row["seerr_request_id"]))
-        if status is None:
+        seerr_status = seerr.request_status(row["seerr_request_id"])
+        if seerr_status is None:
+            not_found.append(row)
             continue
-        with conn:
-            conn.execute(
-                f"UPDATE suggestions SET status = ?, {status}_at = ? WHERE id = ?",
-                (status, now, row["id"]),
-            )
-        changes[status] += 1
+        status = REVIEWED.get(seerr_status)
+        if status is not None:
+            _record(conn, row["id"], status, now)
+            changes[status] += 1
+    if not_found:
+        # A 404 can be any failed lookup, so a request missing from Seerr's
+        # full list is deleted, and any other is checked again next run.
+        existing = seerr.request_ids()
+        for row in not_found:
+            if row["seerr_request_id"] not in existing:
+                _record(conn, row["id"], "deleted", now)
+                changes["deleted"] += 1
     return changes
+
+
+def _record(conn: sqlite3.Connection, row_id: int, status: str, now: int) -> None:
+    with conn:
+        conn.execute(
+            f"UPDATE suggestions SET status = ?, {status}_at = ? WHERE id = ?",
+            (status, now, row_id),
+        )
 
 
 def _score_parts(candidate: Candidate) -> str:
