@@ -227,7 +227,8 @@ def test_failed_cleanup_says_the_request_is_left(seerr):
     respx.delete(f"{URL}/request/42").respond(500, json={"message": "boom"})
 
     with pytest.raises(
-        SeerrError, match="Movie Quota exceeded.; /request/42 is still in Seerr"
+        SeerrError,
+        match="Movie Quota exceeded.; /request/42 is still in Seerr as user 5's",
     ):
         seerr.create_request(5, 3, "movie", 603)
 

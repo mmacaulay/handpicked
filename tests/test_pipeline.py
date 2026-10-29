@@ -5,6 +5,7 @@ from handpicked import db
 from handpicked.config import Config
 from handpicked.pipeline import recommend
 from handpicked.seeds import DAY
+from handpicked.seerr import SeerrUser
 from handpicked.tmdb import TmdbCache, TmdbError
 from handpicked.users import User
 
@@ -37,9 +38,12 @@ class FakeSeerr:
         return self.sets[2]
 
 
-def user(user_id=7, include=True, picks_per_run=None):
+LINKED = SeerrUser(id=3, plex_id=None, display_name="kid", permissions=32)
+
+
+def user(user_id=7, include=True, picks_per_run=None, seerr_user=LINKED):
     return User(
-        user_id, f"user{user_id}", include, None, picks_per_run, None, None, None
+        user_id, f"user{user_id}", include, None, picks_per_run, None, seerr_user, None
     )
 
 
@@ -127,6 +131,21 @@ def test_a_title_goes_to_the_first_user_it_is_picked_for(conn):
 
     assert [p.candidate.tmdb_id for p in first.picks.picks] == [10]
     assert [p.candidate.tmdb_id for p in second.picks.picks] == [11]
+
+
+def test_picks_for_a_user_without_seerr_are_not_reserved(conn):
+    watch(conn, 7, 1, 2)
+    watch(conn, 8, 1, 2)
+    tmdb = FakeTmdb({("movie", 1): [rec(10), rec(11)]})
+    included = [
+        user(7, picks_per_run=1, seerr_user=None),
+        user(8, picks_per_run=1),
+    ]
+
+    first, second = recommend(conn, CONFIG, tmdb, FakeSeerr(), included, NOW)
+
+    assert [p.candidate.tmdb_id for p in first.picks.picks] == [10]
+    assert [p.candidate.tmdb_id for p in second.picks.picks] == [10]
 
 
 def test_tmdb_error_skips_the_user_and_keeps_the_cache(conn, tmp_path):

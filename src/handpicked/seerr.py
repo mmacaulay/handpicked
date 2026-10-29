@@ -13,7 +13,10 @@ OWNED_STATUSES = {3, 4, 5}
 # user is the API caller: ADMIN, MANAGE_REQUESTS, AUTO_APPROVE,
 # AUTO_APPROVE_MOVIE, AUTO_APPROVE_TV.
 AUTO_APPROVE = 2 | 16 | 128 | 256 | 512
+# Permission bits that let a user request movies and series: REQUEST, or
+# both REQUEST_MOVIE and REQUEST_TV.
 REQUEST = 32
+REQUEST_MOVIE_AND_TV = 262144 | 524288
 
 Title = tuple[str, int]  # (media_type, tmdb_id); movie and TV ids overlap
 
@@ -110,7 +113,7 @@ class Seerr:
                 self._send("DELETE", path, expected=204)
             except SeerrError as cleanup:
                 raise SeerrError(
-                    f"{e}; {path} is still in Seerr as as_user's: {cleanup}",
+                    f"{e}; {path} is still in Seerr as user {as_user}'s: {cleanup}",
                     e.status_code,
                 ) from e
             raise

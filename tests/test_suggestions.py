@@ -58,6 +58,8 @@ def rows(conn):
     [
         (32, None),  # REQUEST
         (8 | 32, None),  # and MANAGE_USERS
+        (262144 | 524288, None),  # REQUEST_MOVIE and REQUEST_TV
+        (262144, "needs the Request permission"),  # REQUEST_MOVIE only
         (8, "needs the Request permission"),
         (32 | 128, "must not have Admin"),  # AUTO_APPROVE
         (2, "must not have Admin"),  # ADMIN

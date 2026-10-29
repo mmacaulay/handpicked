@@ -6,7 +6,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 from handpicked.picks import Candidate, Pick
-from handpicked.seerr import REQUEST, Seerr, SeerrError, SeerrUser
+from handpicked.seerr import REQUEST, REQUEST_MOVIE_AND_TV, Seerr, SeerrError, SeerrUser
 from handpicked.users import User
 
 # Seerr MediaRequestStatus values the admin's review leads to. Failed is an
@@ -35,7 +35,8 @@ def request_user_problem(
             f"Seerr user {user.display_name} must not have Admin, Manage Requests,"
             " or Auto-Approve permissions, or its requests skip approval"
         )
-    if not user.permissions & REQUEST:
+    both = user.permissions & REQUEST_MOVIE_AND_TV == REQUEST_MOVIE_AND_TV
+    if not (user.permissions & REQUEST or both):
         return f"Seerr user {user.display_name} needs the Request permission"
     return None
 
