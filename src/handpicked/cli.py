@@ -1,12 +1,16 @@
 import argparse
 import sqlite3
 import sys
+import time
 
 from handpicked import db, users
 from handpicked.config import Config, ConfigError, config_path, load_config
 from handpicked.ingest import ingest
+from handpicked.picks import Candidate
+from handpicked.pipeline import UserPicks, recommend
 from handpicked.seerr import Seerr, SeerrError
 from handpicked.tautulli import Tautulli, TautulliError
+from handpicked.tmdb import Tmdb, TmdbCache, TmdbError
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -46,6 +50,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except SeerrError as e:
         print(f"Seerr error: {e}", file=sys.stderr)
+        return 1
+    except TmdbError as e:
+        print(f"TMDB error: {e}", file=sys.stderr)
         return 1
     except users.UserError as e:
         print(e, file=sys.stderr)
@@ -165,7 +172,64 @@ def _run(
     for user in included:
         if user.problem:
             print(f"Warning: {user.username}: {user.problem}")
+
+    tmdb = Tmdb(config.services.tmdb.token, TmdbCache(conn))
+    results = recommend(conn, config, tmdb, seerr, included, int(time.time()))
+    for result in results:
+        _print_picks(result)
+    checked = sum(r.picks.checked for r in results if r.picks)
+    if checked:
+        rated = sum(r.picks.rated for r in results if r.picks)
+        print(
+            f"\nAge ratings: found for {rated} of {checked} titles checked"
+            f" ({rated / checked:.0%})"
+        )
     return 0
+
+
+def _print_picks(result: UserPicks) -> None:
+    history = result.history
+    unresolved = (
+        f", {history.unresolved} recent titles skipped (no TMDB id)"
+        if history.unresolved
+        else ""
+    )
+    print(
+        f"\n{result.user.username}: {len(history.seeds)} seeds,"
+        f" {len(history.abandoned)} abandoned{unresolved}"
+    )
+    if result.picks is None:
+        print(f"  Skipped: {result.skipped}")
+        return
+    if not result.picks.picks:
+        print(f"  No picks from {result.picks.candidates} candidates")
+    for i, pick in enumerate(result.picks.picks, 1):
+        title, candidate = pick.title, pick.candidate
+        kind = "movie" if title.media_type == "movie" else "TV"
+        print(
+            f"  {i}. {title.title} ({title.year or '?'}, {kind},"
+            f" {title.certification or 'unrated'}) score {candidate.score:.2f}"
+        )
+        print(f"     {_because(candidate)}")
+
+
+def _because(candidate: Candidate) -> str:
+    finished = sorted(
+        (s for s in candidate.seeds if s.weight > 0), key=lambda s: -s.weight
+    )
+    abandoned = [s for s in candidate.seeds if s.weight < 0]
+    reason = f"because you finished {_titles([s.title for s in finished])}"
+    if abandoned:
+        reason += f", despite abandoning {_titles([s.title for s in abandoned])}"
+    return reason
+
+
+def _titles(titles: list[str], limit: int = 3) -> str:
+    if len(titles) > limit:
+        titles = titles[:limit] + [f"{len(titles) - limit} more"]
+    if len(titles) == 1:
+        return titles[0]
+    return f"{', '.join(titles[:-1])} and {titles[-1]}"
 
 
 def _count(group: list[users.User], label: str) -> str:
