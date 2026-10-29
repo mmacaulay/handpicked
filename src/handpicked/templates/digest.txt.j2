@@ -47,4 +47,8 @@ Watch history: {{ r.ingest.new_events }} new events, {{ r.ingest.resolved }} tit
 {% if r.checked %}
 Age ratings: found for {{ r.rated }} of {{ r.checked }} titles checked ({{ "%.0f" | format(100 * r.rated / r.checked) }}%)
 {% endif %}
+{% if r.entries %}
+
+This product uses the TMDB API but is not endorsed or certified by TMDB.
+{% endif %}
 {% endif %}

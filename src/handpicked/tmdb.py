@@ -15,6 +15,8 @@ MediaType = Literal["movie", "tv"]
 
 # Well over a week, so a weekly run finds last week's responses still fresh.
 CACHE_TTL = 30 * 24 * 60 * 60
+# 185px wide, shown at half that so posters stay sharp on high-DPI screens.
+POSTER_URL = "https://image.tmdb.org/t/p/w185"
 
 
 class TmdbError(Exception):
@@ -33,6 +35,11 @@ class Title:
     vote_average: float
     certification: str | None
     age: int | None
+    poster_path: str | None = None
+
+    @property
+    def poster_url(self) -> str | None:
+        return POSTER_URL + self.poster_path if self.poster_path else None
 
 
 class TmdbCache:
@@ -100,6 +107,7 @@ class Tmdb:
             vote_average=body["vote_average"],
             certification=certification,
             age=age,
+            poster_path=body.get("poster_path"),
         )
 
     def _get(self, path: str, params: dict[str, str] | None = None) -> Any | None:

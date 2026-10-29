@@ -28,9 +28,9 @@ def user(user_id, name, problem=None):
     return User(user_id, name, True, None, None, None, None, problem)
 
 
-def pick(tmdb_id, name, media_type="movie", certification="PG"):
+def pick(tmdb_id, name, media_type="movie", certification="PG", poster=None):
     candidate = Candidate(media_type, tmdb_id, 7.84, list(SEEDS))
-    title = Title(tmdb_id, media_type, name, 2020, 1000, 7.84, certification, 8)
+    title = Title(tmdb_id, media_type, name, 2020, 1000, 7.84, certification, 8, poster)
     return Pick(candidate, title)
 
 
@@ -45,7 +45,8 @@ def entry(name, picks, requested=None):
 
 
 def report(**kwargs):
-    first, second = pick(10, "Tom & Jerry <Uncut>"), pick(11, "A Show", "tv", None)
+    first = pick(10, "Tom & Jerry <Uncut>", poster="/tom.jpg")
+    second = pick(11, "A Show", "tv", None)
     defaults = dict(
         dry_run=False,
         changes=Counter(approved=2, deleted=1),
@@ -114,6 +115,17 @@ def test_html_escapes_external_text():
     assert "because you finished Seed One and Seed Two" in html
     assert "Requested in Seerr (#41)" in html
     assert "Not requested: /request: Series Quota exceeded." in html
+
+
+def test_html_shows_posters_and_tmdb_attribution():
+    text, html = parts(render(report(), SETTINGS))
+
+    assert '<img src="https://image.tmdb.org/t/p/w185/tom.jpg" width="92"' in html
+    assert html.count("<img") == 1  # the show without a poster gets a placeholder
+    assert "height:138px" in html
+    attribution = "uses the TMDB API but is not endorsed or certified by TMDB"
+    assert attribution in html
+    assert attribution in text
 
 
 def test_dry_run_is_marked_everywhere():

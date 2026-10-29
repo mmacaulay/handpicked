@@ -15,6 +15,7 @@ MOVIE = {
     "release_date": "1999-03-31",
     "vote_count": 26000,
     "vote_average": 8.2,
+    "poster_path": "/matrix.jpg",
     "release_dates": {
         "results": [
             {"iso_3166_1": "CA", "release_dates": [{"type": 3, "certification": "14A"}]}
@@ -65,6 +66,7 @@ def test_movie_details(tmdb):
         vote_average=8.2,
         certification="14A",
         age=14,
+        poster_path="/matrix.jpg",
     )
     request = route.calls[0].request
     assert request.headers["Authorization"] == "Bearer token"
@@ -80,6 +82,16 @@ def test_tv_details(tmdb):
     assert (title.title, title.year) == ("Severance", 2022)
     assert (title.certification, title.age) == ("TV-MA", 17)
     assert route.calls[0].request.url.params["append_to_response"] == "content_ratings"
+
+
+@respx.mock
+def test_poster_url(tmdb):
+    respx.get(f"{URL}/movie/603").respond(json=MOVIE)
+    respx.get(f"{URL}/tv/95396").respond(json=SHOW | {"poster_path": None})
+
+    movie = tmdb.details("movie", 603)
+    assert movie.poster_url == "https://image.tmdb.org/t/p/w185/matrix.jpg"
+    assert tmdb.details("tv", 95396).poster_url is None
 
 
 @respx.mock
