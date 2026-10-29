@@ -45,6 +45,14 @@ class Tautulli:
                 return
             start += len(rows)
 
+    def users(self) -> list[dict]:
+        """Server users, excluding deleted ones.
+
+        A Plex Home managed user has no Plex username, so Tautulli stores its
+        profile name as the username.
+        """
+        return self._call("get_users", {})
+
     def metadata(self, rating_key: int) -> dict | None:
         """Item metadata, or None if Plex cannot return it."""
         try:

@@ -54,15 +54,6 @@ class Thresholds(Model):
     tv_abandon_weeks: int = Field(4, ge=1)
 
 
-class UserSettings(Model):
-    include: bool = False
-    max_age: int | None = Field(None, ge=0)
-    picks_per_run: int | None = Field(None, ge=1)
-    # Only for Plex Home managed accounts, which Seerr cannot import and so
-    # have no plexId to match on.
-    seerr_user_id: int | None = None
-
-
 class Digest(Model):
     host: str
     port: int = 587
@@ -79,7 +70,6 @@ class Config(Model):
     schedule: str = "0 9 * * SUN"
     picks_per_run: int = Field(3, ge=1)
     thresholds: Thresholds = Field(default_factory=Thresholds)
-    users: dict[str, UserSettings] = Field(default_factory=dict)
     digest: Digest | None = None
 
 

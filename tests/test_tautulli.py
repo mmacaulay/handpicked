@@ -72,6 +72,18 @@ def test_connection_error_raises(tautulli):
 
 
 @respx.mock
+def test_users(tautulli):
+    route = respx.get(URL).respond(
+        json=envelope([{"user_id": 111, "username": "matt", "friendly_name": "Matt"}])
+    )
+
+    assert tautulli.users() == [
+        {"user_id": 111, "username": "matt", "friendly_name": "Matt"}
+    ]
+    assert route.calls[0].request.url.params["cmd"] == "get_users"
+
+
+@respx.mock
 def test_metadata(tautulli):
     respx.get(URL).respond(json=envelope({"guids": ["tmdb://603"]}))
 

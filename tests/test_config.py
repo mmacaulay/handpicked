@@ -23,8 +23,6 @@ def write(tmp_path: Path, text: str) -> Path:
 def test_example_config_is_valid():
     config = load_config(EXAMPLE, environ={})
     assert config.dry_run is True
-    assert config.users["kid"].max_age == 10
-    assert config.users["kid"].seerr_user_id == 7
     assert config.digest is None
 
 
@@ -33,12 +31,6 @@ def test_defaults(tmp_path):
     assert config.dry_run is True
     assert config.picks_per_run == 3
     assert config.thresholds.completion_pct == 80
-    assert config.users == {}
-
-
-def test_users_are_opt_in_by_default(tmp_path):
-    config = load_config(write(tmp_path, MINIMAL + "users:\n  alex: {}\n"), environ={})
-    assert config.users["alex"].include is False
 
 
 def test_missing_required_field(tmp_path):
@@ -48,15 +40,15 @@ def test_missing_required_field(tmp_path):
 
 
 def test_unknown_key_is_rejected(tmp_path):
-    text = MINIMAL + "users:\n  alex: {include: true, max_ages: 10}\n"
-    with pytest.raises(ConfigError, match="max_ages"):
+    text = MINIMAL + "thresholds: {min_vote_counts: 10}\n"
+    with pytest.raises(ConfigError, match="min_vote_counts"):
         load_config(write(tmp_path, text), environ={})
 
 
-def test_yaml_bool_coercion_is_rejected(tmp_path):
-    # YAML 1.1 parses an unquoted `no` key as False, not the string "no".
-    text = MINIMAL + "users:\n  no: {include: true}\n"
-    with pytest.raises(ConfigError):
+def test_users_section_is_rejected(tmp_path):
+    # Users moved to the database; an old config should fail loudly.
+    text = MINIMAL + "users:\n  alex: {include: true}\n"
+    with pytest.raises(ConfigError, match="users"):
         load_config(write(tmp_path, text), environ={})
 
 

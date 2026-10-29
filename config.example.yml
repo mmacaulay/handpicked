@@ -33,19 +33,8 @@ thresholds:
   tv_min_finished_episodes: 3 # finished episodes before a show is a seed
   tv_abandon_weeks: 4         # weeks without returning before a show is abandoned
 
-# Users are opt-in: only users listed here with include: true get picks.
-# Keys are Plex usernames. Discovered users that are not included are listed
-# in the digest.
-users:
-  alex:
-    include: true
-  sam:
-    include: true
-    picks_per_run: 5
-  kid:
-    include: true
-    max_age: 10        # exclude titles rated above this age; unrated titles are excluded too
-    seerr_user_id: 7   # only for Plex Home managed accounts: the local Seerr user created for them
+# Users are not configured here. Run `handpicked users` to list them and
+# `handpicked users set <name> --include` to opt one in.
 
 # Weekly digest email to the admin. Optional until the digest is set up.
 # digest:
