@@ -156,6 +156,7 @@ def _run(
     dry_run = args.dry_run or config.dry_run
     print(f"handpicked run (dry_run={dry_run})")
     report = Report(dry_run=dry_run)
+    unexpected = None
     try:
         _run_steps(report, config, conn, tautulli, seerr)
     except TautulliError as e:
@@ -163,13 +164,17 @@ def _run(
     except SeerrError as e:
         report.stopped = f"Seerr error: {e}"
     except Exception as e:
-        # Tell the admin, then fail with the traceback for the logs.
-        report.stopped = f"Unexpected error: {e!r}"
-        _send_digest(config, report)
-        raise
+        # Its message could quote a URL with an API key, so keep it out of
+        # the email. The traceback goes to the logs once the digest is sent.
+        unexpected = e
+        report.stopped = f"Unexpected error ({type(e).__name__}), see the logs"
     if report.stopped:
         print(report.stopped, file=sys.stderr)
-    sent = _send_digest(config, report)
+    try:
+        sent = _send_digest(config, report)
+    finally:
+        if unexpected is not None:
+            raise unexpected
     return 0 if sent and not report.stopped else 1
 
 

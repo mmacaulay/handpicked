@@ -35,7 +35,7 @@ class Entry:
 @dataclass
 class Report:
     dry_run: bool
-    stopped: str | None = None  # why the run ended before making picks
+    stopped: str | None = None  # why the run stopped early
     request_problem: str | None = None
     changes: Counter[str] | None = None  # None on dry runs
     ingest: IngestStats | None = None
@@ -90,14 +90,17 @@ def _environment(autoescape: bool) -> Environment:
 
 
 def subject(report: Report) -> str:
-    if report.stopped:
-        text = "Handpicked: the run stopped"
+    picks, people = report.pick_count, len(report.entries)
+    made = (
+        f"{picks} {'pick' if picks == 1 else 'picks'}"
+        f" for {people} {'person' if people == 1 else 'people'}"
+    )
+    if not report.stopped:
+        text = f"Handpicked: {made}"
+    elif picks:
+        text = f"Handpicked: the run stopped after {made}"
     else:
-        picks, people = report.pick_count, len(report.entries)
-        text = (
-            f"Handpicked: {picks} {'pick' if picks == 1 else 'picks'}"
-            f" for {people} {'person' if people == 1 else 'people'}"
-        )
+        text = "Handpicked: the run stopped"
     return f"[DRY RUN] {text}" if report.dry_run else text
 
 
@@ -136,11 +139,11 @@ def send(settings: Digest, message: EmailMessage) -> None:
                 _login(smtp, settings)
             smtp.send_message(message)
             # The message is sent, so an error reply to QUIT is not a failure.
-            with suppress(smtplib.SMTPException):
+            with suppress(smtplib.SMTPException, OSError):
                 smtp.quit()
         finally:
             smtp.close()
-    except (smtplib.SMTPException, OSError, ValueError) as e:
+    except (smtplib.SMTPException, OSError) as e:
         raise DigestError(f"{settings.host}:{port}: {e}") from e
 
 

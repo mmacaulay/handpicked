@@ -183,6 +183,14 @@ def test_stopped_run_keeps_what_it_already_did():
     assert "Since the last run: 2 approved" in html
 
 
+def test_stopped_subject_counts_picks_already_made():
+    message = render(report(stopped="Seerr error: down"), SETTINGS)
+
+    assert (
+        message["Subject"] == "Handpicked: the run stopped after 2 picks for 2 people"
+    )
+
+
 def test_sender_without_a_domain_gets_no_message_id():
     settings = SETTINGS.model_copy(update={"sender": "handpicked"})
 
@@ -287,10 +295,14 @@ def test_non_ascii_password_error_leaves_the_password_out(monkeypatch):
     assert error.value.__cause__.__cause__ is None
 
 
-def test_error_reply_to_quit_is_not_a_failure(monkeypatch):
+@pytest.mark.parametrize(
+    "error",
+    [smtplib.SMTPResponseException(421, b"closing"), ConnectionResetError("reset")],
+)
+def test_error_on_quit_is_not_a_failure(monkeypatch, error):
     class Grumpy(FakeSMTP):
         def quit(self):
-            raise smtplib.SMTPResponseException(421, b"closing")
+            raise error
 
     monkeypatch.setattr(digest.smtplib, "SMTP", Grumpy)
     FakeSMTP.instances = []

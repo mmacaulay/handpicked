@@ -323,7 +323,27 @@ def test_unexpected_error_sends_the_digest_then_raises(
     with pytest.raises(RuntimeError, match="bug"):
         main(["run"])
     (message,) = sent
-    assert "Unexpected error: RuntimeError('bug')" in text_part(message)
+    assert "Unexpected error (RuntimeError), see the logs" in text_part(message)
+    assert "bug" not in text_part(message)
+
+
+@respx.mock
+def test_digest_render_failure_keeps_the_original_error(example_config, monkeypatch):
+    add_digest(example_config)
+    mock_services()
+
+    def broken(*args):
+        raise RuntimeError("bug")
+
+    def render(*args):
+        raise TypeError("template")
+
+    monkeypatch.setattr(cli, "recommend", broken)
+    monkeypatch.setattr(cli.digest, "render", render)
+
+    with pytest.raises(RuntimeError, match="bug") as error:
+        main(["run"])
+    assert isinstance(error.value.__context__, TypeError)
 
 
 @respx.mock
