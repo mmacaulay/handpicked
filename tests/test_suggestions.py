@@ -10,7 +10,7 @@ from handpicked import db
 from handpicked.picks import Candidate, Pick
 from handpicked.pipeline import recommend
 from handpicked.seeds import Seed
-from handpicked.seerr import Seerr, SeerrUser
+from handpicked.seerr import Seerr, SeerrError, SeerrUser
 from handpicked.suggestions import request, request_user_problem, sync
 from handpicked.users import User
 
@@ -232,6 +232,17 @@ def test_request_missing_from_the_list_is_looked_up(conn, seerr):
 
     assert sync(conn, seerr, NOW) == {"declined": 1}
     assert [r["status"] for r in rows(conn)] == ["requested", "declined"]
+
+
+@respx.mock
+def test_failed_lookup_is_not_taken_for_deleted(conn, seerr):
+    request_list({})
+    respx.get(f"{URL}/request/1").respond(500, json={"message": "boom"})
+    suggest(conn, 10, 1)
+
+    with pytest.raises(SeerrError, match="boom"):
+        sync(conn, seerr, NOW)
+    assert rows(conn)[0]["status"] == "requested"
 
 
 @respx.mock
