@@ -8,9 +8,9 @@
 {% endif %}
 <h1 style="font-size:20px;margin:0 0 16px;">Handpicked</h1>
 {% if r.stopped %}
-<p style="margin:0 0 8px;font-weight:600;">The run stopped before making any picks:</p>
-<p style="margin:0;color:#b42318;">{{ r.stopped }}</p>
-{% else %}
+<p style="margin:0 0 8px;font-weight:600;">The run stopped early:</p>
+<p style="margin:0 0 16px;color:#b42318;">{{ r.stopped }}</p>
+{% endif %}
 {% if r.request_problem %}
 <p style="margin:0 0 8px;color:#b42318;">Warning: requests cannot be created yet: {{ r.request_problem }}</p>
 {% endif %}
@@ -68,7 +68,6 @@ Age ratings: found for {{ r.rated }} of {{ r.checked }} titles checked ({{ "%.0f
 </p>
 {% if r.entries %}
 <p style="margin:12px 0 0;font-size:12px;{{ muted }}">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
-{% endif %}
 {% endif %}
 </div>
 </body>

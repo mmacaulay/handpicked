@@ -162,6 +162,11 @@ def _run(
         report.stopped = f"Tautulli error: {e}"
     except SeerrError as e:
         report.stopped = f"Seerr error: {e}"
+    except Exception as e:
+        # Tell the admin, then fail with the traceback for the logs.
+        report.stopped = f"Unexpected error: {e!r}"
+        _send_digest(config, report)
+        raise
     if report.stopped:
         print(report.stopped, file=sys.stderr)
     sent = _send_digest(config, report)

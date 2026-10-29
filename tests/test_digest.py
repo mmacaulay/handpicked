@@ -166,9 +166,27 @@ def test_stopped_run_says_why():
     text, html = parts(message)
 
     assert message["Subject"] == "Handpicked: the run stopped"
-    assert "The run stopped before making any picks:\nCannot create requests" in text
+    assert "The run stopped early:\nCannot create requests: no user" in text
     assert "Cannot create requests: no user" in html
     assert "Watch history" not in text
+
+
+def test_stopped_run_keeps_what_it_already_did():
+    stopped = report(
+        stopped="Tautulli error: down", entries=[], included=[], excluded=[]
+    )
+    text, html = parts(render(stopped, SETTINGS))
+
+    assert "The run stopped early:\nTautulli error: down" in text
+    assert "Since the last run: 2 approved, 0 declined, 1 deleted" in text
+    assert "Watch history: 5 new events" in text
+    assert "Since the last run: 2 approved" in html
+
+
+def test_sender_without_a_domain_gets_no_message_id():
+    settings = SETTINGS.model_copy(update={"sender": "handpicked"})
+
+    assert render(report(), settings)["Message-ID"] is None
 
 
 class FakeSMTP:
@@ -179,6 +197,9 @@ class FakeSMTP:
         self.context = context
         self.calls = []
         FakeSMTP.instances.append(self)
+
+    def quit(self):
+        self.calls.append("quit")
 
     def close(self):
         self.calls.append("close")
@@ -212,6 +233,7 @@ def test_starttls_logs_in_and_sends(smtp):
         "starttls",
         ("login", "me@example.com", "secret"),
         ("send", "Handpicked: 2 picks for 2 people"),
+        "quit",
         "close",
     ]
 
@@ -263,6 +285,22 @@ def test_non_ascii_password_error_leaves_the_password_out(monkeypatch):
         send(settings, render(report(), settings))
     assert "\u00e9" not in str(error.value)
     assert error.value.__cause__.__cause__ is None
+
+
+def test_error_reply_to_quit_is_not_a_failure(monkeypatch):
+    class Grumpy(FakeSMTP):
+        def quit(self):
+            raise smtplib.SMTPResponseException(421, b"closing")
+
+    monkeypatch.setattr(digest.smtplib, "SMTP", Grumpy)
+    FakeSMTP.instances = []
+
+    send(SETTINGS, render(report(), SETTINGS))
+
+    assert FakeSMTP.instances[0].calls[-2:] == [
+        ("send", "Handpicked: 2 picks for 2 people"),
+        "close",
+    ]
 
 
 def test_server_closed_even_when_sending_fails(monkeypatch):

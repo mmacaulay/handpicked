@@ -3,6 +3,7 @@
 import smtplib
 import ssl
 from collections import Counter
+from contextlib import suppress
 from dataclasses import dataclass, field
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid, parseaddr
@@ -106,8 +107,11 @@ def render(report: Report, settings: Digest) -> EmailMessage:
     message["From"] = settings.sender
     message["To"] = ", ".join(settings.recipients)
     message["Date"] = formatdate(localtime=True)
-    domain = parseaddr(settings.sender)[1].rpartition("@")[2]
-    message["Message-ID"] = make_msgid(domain=domain or None)
+    # Without a sender domain, leave it to the mail server: make_msgid's
+    # fallback looks up this host's name, which can stall in a container.
+    _, at, domain = parseaddr(settings.sender)[1].rpartition("@")
+    if at and domain:
+        message["Message-ID"] = make_msgid(domain=domain)
     text = _environment(autoescape=False).get_template("digest.txt.j2")
     html = _environment(autoescape=True).get_template("digest.html.j2")
     message.set_content(text.render(r=report))
@@ -125,17 +129,18 @@ def send(settings: Digest, message: EmailMessage) -> None:
             )
         else:
             smtp = smtplib.SMTP(settings.host, port, timeout=TIMEOUT)
-        # Closed without QUIT: a server that answers QUIT with an error after
-        # taking the message would otherwise turn a sent digest into a failure.
         try:
             if settings.security == "starttls":
                 smtp.starttls(context=context)
             if settings.username:
                 _login(smtp, settings)
             smtp.send_message(message)
+            # The message is sent, so an error reply to QUIT is not a failure.
+            with suppress(smtplib.SMTPException):
+                smtp.quit()
         finally:
             smtp.close()
-    except (smtplib.SMTPException, OSError) as e:
+    except (smtplib.SMTPException, OSError, ValueError) as e:
         raise DigestError(f"{settings.host}:{port}: {e}") from e
 
 

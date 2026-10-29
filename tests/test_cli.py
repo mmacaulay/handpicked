@@ -309,6 +309,24 @@ def test_service_error_still_sends_the_digest(example_config, sent, capsys):
 
 
 @respx.mock
+def test_unexpected_error_sends_the_digest_then_raises(
+    example_config, sent, monkeypatch
+):
+    add_digest(example_config)
+    mock_services()
+
+    def broken(*args):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(cli, "recommend", broken)
+
+    with pytest.raises(RuntimeError, match="bug"):
+        main(["run"])
+    (message,) = sent
+    assert "Unexpected error: RuntimeError('bug')" in text_part(message)
+
+
+@respx.mock
 def test_digest_failure_fails_the_run(example_config, capsys, monkeypatch):
     add_digest(example_config)
     mock_services()

@@ -2,9 +2,9 @@
 DRY RUN: nothing was requested in Seerr or recorded.
 {% endif %}
 {% if r.stopped %}
-The run stopped before making any picks:
+The run stopped early:
 {{ r.stopped }}
-{% else %}
+{% endif %}
 {% if r.request_problem %}
 Warning: requests cannot be created yet: {{ r.request_problem }}
 {% endif %}
@@ -50,5 +50,4 @@ Age ratings: found for {{ r.rated }} of {{ r.checked }} titles checked ({{ "%.0f
 {% if r.entries %}
 
 This product uses the TMDB API but is not endorsed or certified by TMDB.
-{% endif %}
 {% endif %}
