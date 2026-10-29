@@ -1,6 +1,8 @@
+from dataclasses import replace
+
 import pytest
 
-from handpicked.picks import RATING_PRIOR_MAX, choose
+from handpicked.picks import RATING_PRIOR_MAX, SEED_REUSE, choose
 from handpicked.seeds import History, Seed
 from handpicked.tmdb import Title
 
@@ -51,28 +53,36 @@ def ids(result):
 
 
 def test_score_sums_recommending_seeds_and_rating_prior():
+    tmdb = FakeTmdb({("movie", 1): [rec(10)], ("movie", 2): [rec(10)]})
+
+    result = pick(History(seeds=[SEED_A, SEED_B]), tmdb)
+
+    (candidate,) = (p.candidate for p in result.picks)
+    assert candidate.seeds == [SEED_A, SEED_B]
+    assert candidate.score == pytest.approx(1.5 + 0.8 * RATING_PRIOR_MAX)
+
+
+def test_seeds_behind_an_earlier_pick_are_discounted():
     tmdb = FakeTmdb(
-        {("movie", 1): [rec(10), rec(11, vote_average=10)], ("movie", 2): [rec(10)]}
+        {("movie", 1): [rec(10), rec(11)], ("movie", 2): [rec(12, vote_average=10)]}
     )
 
     result = pick(History(seeds=[SEED_A, SEED_B]), tmdb)
 
-    assert ids(result) == [("movie", 10), ("movie", 11)]
-    first, second = (p.candidate for p in result.picks)
-    assert first.seeds == [SEED_A, SEED_B]
-    assert first.score == pytest.approx(1.5 + 0.8 * RATING_PRIOR_MAX)
-    assert second.score == pytest.approx(1.0 + RATING_PRIOR_MAX)
+    assert ids(result) == [("movie", 10), ("movie", 12), ("movie", 11)]
+    third = result.picks[2].candidate
+    assert third.seeds == [replace(SEED_A, weight=SEED_REUSE)]
+    assert third.score == pytest.approx(SEED_REUSE + 0.8 * RATING_PRIOR_MAX)
 
 
 def test_abandoned_titles_only_penalize_existing_candidates():
-    tmdb = FakeTmdb(
-        {("movie", 1): [rec(10), rec(11)], ("movie", 3): [rec(10), rec(12)]}
-    )
+    tmdb = FakeTmdb({("movie", 1): [rec(10)], ("movie", 3): [rec(10), rec(12)]})
 
     result = pick(History(seeds=[SEED_A], abandoned=[ABANDONED]), tmdb)
 
-    assert ids(result) == [("movie", 11), ("movie", 10)]
-    penalized = result.picks[1].candidate
+    assert ids(result) == [("movie", 10)]
+    assert result.candidates == 1
+    penalized = result.picks[0].candidate
     assert penalized.seeds == [SEED_A, ABANDONED]
     assert penalized.score == pytest.approx(0.5 + 0.8 * RATING_PRIOR_MAX)
 

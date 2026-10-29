@@ -1,6 +1,7 @@
 """Score a user's candidates and choose their picks."""
 
-from dataclasses import dataclass, field
+from collections import Counter
+from dataclasses import dataclass, field, replace
 
 from handpicked.seeds import History, Seed
 from handpicked.tmdb import MediaType, Title, Tmdb
@@ -8,6 +9,10 @@ from handpicked.tmdb import MediaType, Title, Tmdb
 # The most a perfect TMDB rating adds to a score. Small next to a seed
 # (0.5 to 1.5), so it mostly breaks ties between single-seed candidates.
 RATING_PRIOR_MAX = 0.25
+# A seed already behind an earlier pick counts at this fraction (again for
+# each further pick), so one cluster of related seeds cannot fill every
+# slot. Above zero so a user with a single seed still gets their picks.
+SEED_REUSE = 0.1
 
 
 @dataclass
@@ -52,8 +57,10 @@ def choose(
     """The top `count` candidates recommended by the user's seeds.
 
     Abandoned titles only lower the score of candidates a seed recommends.
-    Details are fetched in score order until enough candidates pass the age
-    filter, since only they carry the certification.
+    Picks are chosen one at a time, with seeds behind earlier picks
+    discounted, and each pick keeps the weights it was scored with. Details
+    are fetched in that order until enough candidates pass the age filter,
+    since only they carry the certification.
     """
     candidates: dict[tuple[str, int], Candidate] = {}
     # Seeds first, so abandoned titles only reach candidates that exist.
@@ -72,16 +79,24 @@ def choose(
                 )
             candidates[key].seeds.append(seed)
 
-    ranked = sorted(
-        # Drop candidates whose abandoned titles cancel out their seeds.
-        (c for c in candidates.values() if c.score > c.rating_prior),
-        key=lambda c: (-c.score, c.media_type, c.tmdb_id),
-    )
+    remaining = dict(candidates)
+    uses: Counter[tuple[str, int]] = Counter()  # picks each seed is behind
     picks: list[Pick] = []
     checked = rated = 0
-    for candidate in ranked:
-        if len(picks) == count:
+    while len(picks) < count:
+        ranked = sorted(
+            (
+                c
+                for c in (_reused(c, uses) for c in remaining.values())
+                # Drop candidates whose abandoned titles cancel out their seeds.
+                if c.score > c.rating_prior
+            ),
+            key=lambda c: (-c.score, c.media_type, c.tmdb_id),
+        )
+        if not ranked:
             break
+        candidate = ranked[0]
+        del remaining[candidate.media_type, candidate.tmdb_id]
         title = tmdb.details(candidate.media_type, candidate.tmdb_id)
         if title is None:
             continue
@@ -91,4 +106,16 @@ def choose(
         if max_age is not None and (title.age is None or title.age > max_age):
             continue
         picks.append(Pick(candidate, title))
+        uses.update((s.media_type, s.tmdb_id) for s in candidate.seeds if s.weight > 0)
     return Picks(picks, len(candidates), checked, rated)
+
+
+def _reused(candidate: Candidate, uses: Counter[tuple[str, int]]) -> Candidate:
+    """The candidate with each seed discounted for the picks it is already behind."""
+    return replace(
+        candidate,
+        seeds=[
+            replace(s, weight=s.weight * SEED_REUSE ** uses[s.media_type, s.tmdb_id])
+            for s in candidate.seeds
+        ],
+    )
