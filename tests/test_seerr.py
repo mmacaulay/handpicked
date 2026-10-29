@@ -134,12 +134,12 @@ def test_requested_includes_every_status(seerr):
 
 
 @respx.mock
-def test_request_ids_include_every_status(seerr):
+def test_request_statuses_include_every_status(seerr):
     route = respx.get(f"{URL}/request").respond(
         json=page([{"id": 40 + status, "status": status} for status in range(1, 6)])
     )
 
-    assert seerr.request_ids() == {41, 42, 43, 44, 45}
+    assert seerr.request_statuses() == {41: 1, 42: 2, 43: 3, 44: 4, 45: 5}
     assert route.calls[0].request.url.params["filter"] == "all"
 
 

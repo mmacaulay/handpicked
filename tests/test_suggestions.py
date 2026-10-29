@@ -173,16 +173,16 @@ def suggest(conn, tmdb_id, request_id, status="requested"):
 
 
 def not_found(request_id):
-    respx.get(f"{URL}/request/{request_id}").respond(
+    return respx.get(f"{URL}/request/{request_id}").respond(
         404, json={"message": "Request not found."}
     )
 
 
-def request_list(*request_ids):
+def request_list(statuses):
     return respx.get(f"{URL}/request").respond(
         json={
-            "pageInfo": {"results": len(request_ids)},
-            "results": [{"id": request_id} for request_id in request_ids],
+            "pageInfo": {"results": len(statuses)},
+            "results": [{"id": i, "status": s} for i, s in statuses.items()],
         }
     )
 
@@ -190,10 +190,8 @@ def request_list(*request_ids):
 @respx.mock
 def test_sync_records_the_admins_review(conn, seerr):
     # Seerr status: pending, approved, declined, failed, completed, deleted
-    for request_id, status in [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5)]:
-        respx.get(f"{URL}/request/{request_id}").respond(json={"status": status})
+    request_list({1: 1, 2: 2, 3: 3, 4: 4, 5: 5})
     not_found(6)
-    request_list(1, 2, 3, 4, 5)
     for request_id in range(1, 7):
         suggest(conn, 10 + request_id, request_id)
 
@@ -214,37 +212,38 @@ def test_sync_records_the_admins_review(conn, seerr):
 
 
 @respx.mock
+def test_listed_requests_are_not_looked_up(conn, seerr):
+    request_list({1: 2})
+    route = respx.get(f"{URL}/request/1")
+    suggest(conn, 10, 1)
+
+    assert sync(conn, seerr, NOW) == {"approved": 1}
+    assert not route.called
+
+
+@respx.mock
+def test_request_missing_from_the_list_is_looked_up(conn, seerr):
+    # e.g. a blocklisted title, or skipped by paging while the list changed
+    request_list({})
+    respx.get(f"{URL}/request/1").respond(json={"status": 1})
+    respx.get(f"{URL}/request/2").respond(json={"status": 3})
+    suggest(conn, 10, 1)
+    suggest(conn, 11, 2)
+
+    assert sync(conn, seerr, NOW) == {"declined": 1}
+    assert [r["status"] for r in rows(conn)] == ["requested", "declined"]
+
+
+@respx.mock
 def test_deleted_requests_are_not_checked_again(conn, seerr):
+    request_list({})
     not_found(1)
-    request_list()
     suggest(conn, 10, 1)
     sync(conn, seerr, NOW)
     respx.reset()
 
     assert sync(conn, seerr, NOW) == {}
     assert not respx.calls
-
-
-@respx.mock
-def test_not_found_request_still_in_seerr_stays_requested(conn, seerr):
-    # Seerr answers 404 for any failed lookup, e.g. a database error.
-    not_found(1)
-    request_list(1)
-    suggest(conn, 10, 1)
-
-    assert sync(conn, seerr, NOW) == {}
-    assert rows(conn)[0]["status"] == "requested"
-
-
-@respx.mock
-def test_request_list_is_only_fetched_after_a_not_found(conn, seerr):
-    respx.get(f"{URL}/request/1").respond(json={"status": 1})
-    route = request_list(1)
-    suggest(conn, 10, 1)
-
-    sync(conn, seerr, NOW)
-
-    assert not route.called
 
 
 @respx.mock

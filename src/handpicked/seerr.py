@@ -73,9 +73,12 @@ class Seerr:
             for request in self._paged("/request", {"filter": "all"})
         }
 
-    def request_ids(self) -> set[int]:
-        """Ids of every request in any status, except for blocklisted titles."""
-        return {request["id"] for request in self._paged("/request", {"filter": "all"})}
+    def request_statuses(self) -> dict[int, int]:
+        """Each request's MediaRequestStatus by id, except for blocklisted titles."""
+        return {
+            request["id"]: request["status"]
+            for request in self._paged("/request", {"filter": "all"})
+        }
 
     def blocklisted(self) -> set[Title]:
         return {

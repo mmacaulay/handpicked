@@ -96,24 +96,22 @@ def sync(conn: sqlite3.Connection, seerr: Seerr, now: int) -> Counter[str]:
         WHERE status = 'requested' AND seerr_request_id IS NOT NULL
         """
     ).fetchall()
-    not_found = []
+    if not rows:
+        return changes
+    listed = seerr.request_statuses()
     for row in rows:
-        seerr_status = seerr.request_status(row["seerr_request_id"])
-        if seerr_status is None:
-            not_found.append(row)
-            continue
-        status = REVIEWED.get(seerr_status)
+        request_id = row["seerr_request_id"]
+        if request_id in listed:
+            seerr_status = listed[request_id]
+        else:
+            # The list leaves out blocklisted titles, and paging can skip a
+            # request if the list changes meanwhile. Seerr answers 404 for any
+            # failed lookup, so a request is deleted only if both miss it.
+            seerr_status = seerr.request_status(request_id)
+        status = "deleted" if seerr_status is None else REVIEWED.get(seerr_status)
         if status is not None:
             _record(conn, row["id"], status, now)
             changes[status] += 1
-    if not_found:
-        # A 404 can be any failed lookup, so a request missing from Seerr's
-        # full list is deleted, and any other is checked again next run.
-        existing = seerr.request_ids()
-        for row in not_found:
-            if row["seerr_request_id"] not in existing:
-                _record(conn, row["id"], "deleted", now)
-                changes["deleted"] += 1
     return changes
 
 

@@ -1,6 +1,6 @@
 -- Add the deleted status, for a request deleted in Seerr while pending:
--- proposed -> requested -> approved | declined | deleted -> available
---   -> watched | abandoned | ignored
+-- proposed -> requested -> approved -> available -> watched | abandoned | ignored
+--                       -> declined | deleted (final)
 -- SQLite cannot change a CHECK constraint, so rebuild the table. Nothing
 -- references suggestions, so dropping it is safe with foreign keys on.
 CREATE TABLE suggestions_new (
