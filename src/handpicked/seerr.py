@@ -13,6 +13,7 @@ OWNED_STATUSES = {3, 4, 5}
 # user is the API caller: ADMIN, MANAGE_REQUESTS, AUTO_APPROVE,
 # AUTO_APPROVE_MOVIE, AUTO_APPROVE_TV.
 AUTO_APPROVE = 2 | 16 | 128 | 256 | 512
+REQUEST = 32
 
 Title = tuple[str, int]  # (media_type, tmdb_id); movie and TV ids overlap
 
@@ -74,6 +75,56 @@ class Seerr:
             (item["mediaType"], item["tmdbId"]) for item in self._paged("/blocklist")
         }
 
+    def create_request(
+        self, as_user: int, user_id: int, media_type: str, tmdb_id: int
+    ) -> int:
+        """Create a pending request for `user_id`. Returns its id.
+
+        Setting a new request's user takes Manage Users and Manage Requests,
+        and Manage Requests approves it. So `as_user`, which must not
+        auto-approve, creates the request, and the admin key then reassigns
+        it. Seerr keeps an edited request pending, and checks the new user's
+        quota.
+        """
+        body: dict[str, Any] = {"mediaType": media_type, "mediaId": tmdb_id}
+        if media_type == "tv":
+            body["seasons"] = "all"
+        # Created is exactly 201: Seerr answers "no seasons available" with a
+        # 202 and no request.
+        request = self._send(
+            "POST",
+            "/request",
+            expected=201,
+            json=body,
+            headers={"X-API-User": str(as_user)},
+        )
+        path = f"/request/{request['id']}"
+        change: dict[str, Any] = {"mediaType": media_type, "userId": user_id}
+        if media_type == "tv":
+            change["seasons"] = [s["seasonNumber"] for s in request["seasons"]]
+        try:
+            self._send("PUT", path, json=change)
+        except SeerrError as e:
+            # Leave nothing in the queue that reads as requested by `as_user`.
+            try:
+                self._send("DELETE", path, expected=204)
+            except SeerrError as cleanup:
+                raise SeerrError(
+                    f"{e}; {path} is still in Seerr as as_user's: {cleanup}",
+                    e.status_code,
+                ) from e
+            raise
+        return request["id"]
+
+    def request_status(self, request_id: int) -> int | None:
+        """The request's MediaRequestStatus, or None if it was deleted."""
+        try:
+            return self._get(f"/request/{request_id}")["status"]
+        except SeerrError as e:
+            if e.status_code == 404:
+                return None
+            raise
+
     def _paged(self, path: str, params: dict[str, Any] | None = None) -> Iterator[dict]:
         skip = 0
         while True:
@@ -87,14 +138,28 @@ class Seerr:
             if not results or skip >= body["pageInfo"]["results"]:
                 return
 
-    def _get(self, path: str, params: dict[str, Any]) -> Any:
+    def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         # No X-API-User header: reads must run as the admin, or Seerr limits
         # them to that user's own requests and hides plexId.
+        return self._send("GET", path, params=params)
+
+    def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        expected: int = 200,
+        headers: dict[str, str] | None = None,
+        **kwargs: Any,
+    ) -> Any:
         try:
-            response = self._client.get(
-                self._url + path, params=params, headers={"X-Api-Key": self._api_key}
+            response = self._client.request(
+                method,
+                self._url + path,
+                headers={"X-Api-Key": self._api_key, **(headers or {})},
+                **kwargs,
             )
-            body = response.json()
+            body = response.json() if response.content else {}
         except httpx.HTTPError as e:
             raise SeerrError(f"{path}: {e}") from e
         except ValueError as e:
@@ -102,7 +167,7 @@ class Seerr:
                 f"{path}: unexpected response (HTTP {response.status_code})",
                 response.status_code,
             ) from e
-        if response.is_error:
+        if response.status_code != expected:
             raise SeerrError(
                 f"{path}: {body.get('message') or 'request failed'}",
                 response.status_code,

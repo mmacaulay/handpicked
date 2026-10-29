@@ -3,14 +3,15 @@ import sqlite3
 import sys
 import time
 
-from handpicked import db, users
+from handpicked import db, suggestions, users
 from handpicked.config import Config, ConfigError, config_path, load_config
 from handpicked.ingest import ingest
 from handpicked.picks import Candidate
 from handpicked.pipeline import UserPicks, recommend
 from handpicked.seerr import Seerr, SeerrError
+from handpicked.suggestions import Requested
 from handpicked.tautulli import Tautulli, TautulliError
-from handpicked.tmdb import Tmdb, TmdbCache, TmdbError
+from handpicked.tmdb import Tmdb, TmdbCache
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -50,9 +51,6 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except SeerrError as e:
         print(f"Seerr error: {e}", file=sys.stderr)
-        return 1
-    except TmdbError as e:
-        print(f"TMDB error: {e}", file=sys.stderr)
         return 1
     except users.UserError as e:
         print(e, file=sys.stderr)
@@ -157,6 +155,21 @@ def _run(
 ) -> int:
     dry_run = args.dry_run or config.dry_run
     print(f"handpicked run (dry_run={dry_run})")
+    now = int(time.time())
+
+    as_user = config.services.seerr.request_user_id
+    problem = suggestions.request_user_problem(seerr.users(), as_user)
+    if problem and not dry_run:
+        print(f"Cannot create requests: {problem}", file=sys.stderr)
+        return 1
+    if problem:
+        print(f"Warning: requests cannot be created yet: {problem}")
+    if not dry_run:
+        changes = suggestions.sync(conn, seerr, now)
+        print(
+            f"Requests since last run: {changes['approved']} approved,"
+            f" {changes['declined']} declined"
+        )
 
     stats = ingest(conn, tautulli)
     print(
@@ -174,9 +187,18 @@ def _run(
             print(f"Warning: {user.username}: {user.problem}")
 
     tmdb = Tmdb(config.services.tmdb.token, TmdbCache(conn))
-    results = recommend(conn, config, tmdb, seerr, included, int(time.time()))
+    results = recommend(conn, config, tmdb, seerr, included, now)
     for result in results:
-        _print_picks(result)
+        requested = None
+        if not dry_run and result.picks:
+            if result.user.seerr_user:
+                requested = suggestions.request(
+                    conn, seerr, as_user, result.user, result.picks.picks, now
+                )
+            else:
+                reason = result.user.problem or "no Seerr user"
+                requested = [Requested(p, None, reason) for p in result.picks.picks]
+        _print_picks(result, requested)
     checked = sum(r.picks.checked for r in results if r.picks)
     if checked:
         rated = sum(r.picks.rated for r in results if r.picks)
@@ -187,7 +209,8 @@ def _run(
     return 0
 
 
-def _print_picks(result: UserPicks) -> None:
+def _print_picks(result: UserPicks, requested: list[Requested] | None) -> None:
+    """Print a user's picks, with what Seerr did with each unless a dry run."""
     history = result.history
     unresolved = (
         f", {history.unresolved} recent titles skipped (no TMDB id)"
@@ -211,6 +234,13 @@ def _print_picks(result: UserPicks) -> None:
             f" {title.certification or 'unrated'}) score {candidate.score:.2f}"
         )
         print(f"     {_because(candidate)}")
+        if requested:
+            outcome = requested[i - 1]
+            print(
+                f"     requested in Seerr (#{outcome.request_id})"
+                if outcome.request_id
+                else f"     not requested: {outcome.error}"
+            )
 
 
 def _because(candidate: Candidate) -> str:

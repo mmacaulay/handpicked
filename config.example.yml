@@ -11,6 +11,12 @@ services:
   seerr:
     url: http://seerr:5055
     api_key: your-seerr-api-key
+    # Seerr id of a local user (e.g. "Handpicked") that creates the requests
+    # before they are handed to each member, needed once dry_run is off. Give
+    # it Request, no request limit, and nothing that approves requests
+    # (Admin, Manage Requests, Auto-Approve), so they stay pending. The id is
+    # in the user's Seerr URL, /users/<id>.
+    # request_user_id: 5
   tmdb:
     token: your-tmdb-v4-read-token
 

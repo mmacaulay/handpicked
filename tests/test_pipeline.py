@@ -117,8 +117,21 @@ def test_picks_per_run_falls_back_to_config(conn):
     assert len(custom.picks.picks) == 5
 
 
-def test_tmdb_cache_is_kept_when_a_run_fails(conn, tmp_path):
+def test_a_title_goes_to_the_first_user_it_is_picked_for(conn):
     watch(conn, 7, 1, 2)
+    watch(conn, 8, 1, 2)
+    tmdb = FakeTmdb({("movie", 1): [rec(10), rec(11)]})
+    included = [user(7, picks_per_run=1), user(8, picks_per_run=1)]
+
+    first, second = recommend(conn, CONFIG, tmdb, FakeSeerr(), included, NOW)
+
+    assert [p.candidate.tmdb_id for p in first.picks.picks] == [10]
+    assert [p.candidate.tmdb_id for p in second.picks.picks] == [11]
+
+
+def test_tmdb_error_skips_the_user_and_keeps_the_cache(conn, tmp_path):
+    watch(conn, 7, 1, 2)
+    watch(conn, 8, 3, 4)
     cache = TmdbCache(conn)
 
     class FailingTmdb(FakeTmdb):
@@ -126,11 +139,14 @@ def test_tmdb_cache_is_kept_when_a_run_fails(conn, tmp_path):
             if tmdb_id == 2:
                 raise TmdbError("rate limited", 429)
             cache.put(f"/{media_type}/{tmdb_id}/recommendations", {"results": []})
-            return []
+            return super().recommendations(media_type, tmdb_id)
 
-    with pytest.raises(TmdbError):
-        recommend(conn, CONFIG, FailingTmdb({}), FakeSeerr(), [user()], NOW)
+    tmdb = FailingTmdb({("movie", 3): [rec(10)]})
+    failed, picked = recommend(conn, CONFIG, tmdb, FakeSeerr(), [user(7), user(8)], NOW)
 
+    assert failed.picks is None
+    assert failed.skipped == "TMDB error: rate limited"
+    assert [p.candidate.tmdb_id for p in picked.picks.picks] == [10]
     other = db.connect(tmp_path / "test.db")
     assert other.execute("SELECT key FROM tmdb_cache").fetchall()[0][0] == (
         "/movie/1/recommendations"

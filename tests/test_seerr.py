@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 import respx
@@ -154,3 +156,100 @@ def test_connection_error_raises(seerr):
 
     with pytest.raises(SeerrError, match="refused"):
         seerr.users()
+
+
+@respx.mock
+def test_create_request_then_reassign_it(seerr):
+    post = respx.post(f"{URL}/request").respond(201, json={"id": 42})
+    put = respx.put(f"{URL}/request/42").respond(json={"id": 42})
+
+    assert seerr.create_request(5, 3, "movie", 603) == 42
+    created, reassigned = post.calls[0].request, put.calls[0].request
+    assert created.headers["X-Api-Key"] == "key"
+    assert created.headers["X-API-User"] == "5"
+    assert json.loads(created.content) == {"mediaType": "movie", "mediaId": 603}
+    assert reassigned.headers["X-Api-Key"] == "key"
+    assert "X-API-User" not in reassigned.headers
+    assert json.loads(reassigned.content) == {"mediaType": "movie", "userId": 3}
+
+
+@respx.mock
+def test_tv_request_asks_for_all_seasons_and_keeps_them(seerr):
+    post = respx.post(f"{URL}/request").respond(
+        201, json={"id": 42, "seasons": [{"seasonNumber": 1}, {"seasonNumber": 2}]}
+    )
+    put = respx.put(f"{URL}/request/42").respond(json={"id": 42})
+
+    seerr.create_request(5, 3, "tv", 1399)
+    assert json.loads(post.calls[0].request.content)["seasons"] == "all"
+    assert json.loads(put.calls[0].request.content)["seasons"] == [1, 2]
+
+
+@pytest.mark.parametrize(
+    ("status", "message"),
+    [
+        (202, "No seasons available to request"),
+        (403, "You do not have permission to make movie requests."),
+        (409, "Request for this media already exists."),
+    ],
+)
+@respx.mock
+def test_refused_request_raises_with_seerr_message(seerr, status, message):
+    respx.post(f"{URL}/request").respond(status, json={"message": message})
+    put = respx.put(url__regex=r".*")
+
+    with pytest.raises(SeerrError, match=message) as error:
+        seerr.create_request(5, 3, "tv", 1399)
+    assert error.value.status_code == status
+    assert not put.called
+
+
+@respx.mock
+def test_refused_reassign_deletes_the_request(seerr):
+    respx.post(f"{URL}/request").respond(201, json={"id": 42})
+    respx.put(f"{URL}/request/42").respond(
+        403, json={"message": "Movie Quota exceeded."}
+    )
+    delete = respx.delete(f"{URL}/request/42").respond(204)
+
+    with pytest.raises(SeerrError, match="Movie Quota exceeded.") as error:
+        seerr.create_request(5, 3, "movie", 603)
+    assert error.value.status_code == 403
+    assert delete.called
+
+
+@respx.mock
+def test_failed_cleanup_says_the_request_is_left(seerr):
+    respx.post(f"{URL}/request").respond(201, json={"id": 42})
+    respx.put(f"{URL}/request/42").respond(
+        403, json={"message": "Movie Quota exceeded."}
+    )
+    respx.delete(f"{URL}/request/42").respond(500, json={"message": "boom"})
+
+    with pytest.raises(
+        SeerrError, match="Movie Quota exceeded.; /request/42 is still in Seerr"
+    ):
+        seerr.create_request(5, 3, "movie", 603)
+
+
+@respx.mock
+def test_request_status(seerr):
+    route = respx.get(f"{URL}/request/42").respond(json={"id": 42, "status": 3})
+
+    assert seerr.request_status(42) == 3
+    assert "X-API-User" not in route.calls[0].request.headers
+
+
+@respx.mock
+def test_deleted_request_has_no_status(seerr):
+    respx.get(f"{URL}/request/42").respond(404, json={"message": "Request not found."})
+
+    assert seerr.request_status(42) is None
+
+
+@respx.mock
+def test_request_status_raises_other_errors(seerr):
+    respx.get(f"{URL}/request/42").respond(500, json={"message": "boom"})
+
+    with pytest.raises(SeerrError, match="boom"):
+        seerr.request_status(42)

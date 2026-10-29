@@ -5,12 +5,12 @@ import httpx
 import pytest
 import respx
 
-from handpicked import cli, users
+from handpicked import cli, db, users
 from handpicked.cli import main
 from handpicked.picks import Candidate, Pick, Picks
 from handpicked.pipeline import UserPicks
 from handpicked.seeds import History, Seed
-from handpicked.tmdb import Title, TmdbError
+from handpicked.tmdb import Title
 
 EXAMPLE = Path(__file__).parent.parent / "config.example.yml"
 TAUTULLI = "http://tautulli:8181/api/v2"
@@ -118,16 +118,107 @@ def test_run_prints_picks_and_reasons(example_config, capsys, monkeypatch):
     assert "Age ratings: found for 1 of 2 titles checked (50%)" in out
 
 
-@respx.mock
-def test_tmdb_error_exits_with_error(example_config, capsys, monkeypatch):
-    def fail(*args):
-        raise TmdbError("/movie/1/recommendations: rate limited", 429)
+@pytest.fixture
+def live_config(example_config):
+    text = example_config.read_text()
+    text = text.replace("dry_run: true", "dry_run: false")
+    text = text.replace("# request_user_id: 5", "request_user_id: 5")
+    example_config.write_text(text)
+    return example_config
 
-    monkeypatch.setattr(cli, "recommend", fail)
-    mock_services()
+
+HANDPICKED = seerr_user(5, "Handpicked", permissions=32)
+
+
+def user_picks(user_id, name, seerr, *tmdb_ids):
+    picks = [
+        Pick(
+            Candidate("movie", i, 8.0, [Seed("movie", 1, "Seed", 1.0)]),
+            Title(i, "movie", f"Pick {i}", 2020, 1000, 8.0, "PG", 8),
+        )
+        for i in tmdb_ids
+    ]
+    problem = None if seerr else "no matching Seerr user"
+    return UserPicks(
+        users.User(user_id, name, True, None, None, None, seerr, problem),
+        History(seeds=[Seed("movie", 1, "Seed", 1.0)]),
+        Picks(picks, candidates=4, checked=2, rated=2),
+        None,
+    )
+
+
+@respx.mock
+def test_run_requests_picks_and_syncs(live_config, capsys, monkeypatch):
+    mock_services(
+        tautulli_users=[(111, "matt"), (333, "emma")], seerr_users=[HANDPICKED]
+    )
+    matt = users.SeerrUser(id=1, plex_id=111, display_name="matt", permissions=32)
+    monkeypatch.setattr(
+        cli,
+        "recommend",
+        lambda *args: [
+            user_picks(111, "matt", matt, 10, 11),
+            user_picks(333, "emma", None, 12),
+        ],
+    )
+    post = respx.post(f"{SEERR}/request").mock(
+        side_effect=[
+            httpx.Response(201, json={"id": 41}),
+            httpx.Response(403, json={"message": "Movie Quota exceeded."}),
+        ]
+    )
+    respx.put(f"{SEERR}/request/41").respond(json={"id": 41})
+
+    assert main(["run"]) == 0
+    out = capsys.readouterr().out
+    assert "Requests since last run: 0 approved, 0 declined" in out
+    assert "1. Pick 10 (2020, movie, PG) score 1.20" in out
+    assert "requested in Seerr (#41)" in out
+    assert "not requested: /request: Movie Quota exceeded." in out
+    assert "1. Pick 12 (2020, movie, PG) score 1.20\n" in out
+    assert "not requested: no matching Seerr user" in out
+    assert post.call_count == 2
+
+    respx.get(f"{SEERR}/request/41").respond(json={"status": 3})
+    monkeypatch.setattr(cli, "recommend", lambda *args: [])
+
+    assert main(["run"]) == 0
+    assert "Requests since last run: 0 approved, 1 declined" in capsys.readouterr().out
+    assert post.call_count == 2
+
+
+@respx.mock
+def test_run_needs_a_usable_request_user(live_config, capsys):
+    mock_services(seerr_users=[seerr_user(5, "Handpicked", permissions=2)])
+    post = respx.post(f"{SEERR}/request")
 
     assert main(["run"]) == 1
-    assert "TMDB error: /movie/1/recommendations" in capsys.readouterr().err
+    assert "Cannot create requests: Seerr user Handpicked must not have Admin" in (
+        capsys.readouterr().err
+    )
+    assert not post.called
+
+
+@respx.mock
+def test_dry_run_warns_and_requests_nothing(example_config, capsys, monkeypatch):
+    mock_services(tautulli_users=[(111, "matt")])
+    matt = users.SeerrUser(id=1, plex_id=111, display_name="matt", permissions=32)
+    monkeypatch.setattr(
+        cli, "recommend", lambda *args: [user_picks(111, "matt", matt, 10)]
+    )
+    post = respx.post(f"{SEERR}/request")
+
+    assert main(["run"]) == 0
+    out = capsys.readouterr().out
+    assert (
+        "Warning: requests cannot be created yet:"
+        " services.seerr.request_user_id is not set"
+    ) in out
+    assert "Requests since last run" not in out
+    assert "requested in Seerr" not in out
+    assert not post.called
+    conn = db.connect(example_config.parent / "handpicked.db")
+    assert conn.execute("SELECT COUNT(*) FROM suggestions").fetchone()[0] == 0
 
 
 @respx.mock
@@ -213,6 +304,7 @@ def test_seerr_error_exits_with_error(example_config, capsys):
 
 @respx.mock
 def test_tautulli_error_exits_with_error(example_config, capsys):
+    respx.get(f"{SEERR}/user").respond(json={"pageInfo": {"results": 0}, "results": []})
     respx.get(TAUTULLI).mock(side_effect=httpx.ConnectError("refused"))
 
     assert main(["run"]) == 1
