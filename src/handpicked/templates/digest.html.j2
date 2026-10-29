@@ -1,0 +1,61 @@
+{% set muted = "color:#59636e;" %}
+<!doctype html>
+<html>
+<body style="margin:0;padding:24px 12px;background:#f3f2ef;font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:15px;line-height:1.45;color:#1f2328;">
+<div style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:10px;padding:24px;">
+{% if r.dry_run %}
+<div style="background:#fff4d6;border:1px solid #e3b341;color:#6b4b00;border-radius:6px;padding:10px 14px;margin:0 0 20px;font-weight:600;">DRY RUN: nothing was requested in Seerr or recorded.</div>
+{% endif %}
+<h1 style="font-size:20px;margin:0 0 16px;">Handpicked</h1>
+{% if r.stopped %}
+<p style="margin:0 0 8px;font-weight:600;">The run stopped before making any picks:</p>
+<p style="margin:0;color:#b42318;">{{ r.stopped }}</p>
+{% else %}
+{% if r.request_problem %}
+<p style="margin:0 0 8px;color:#b42318;">Warning: requests cannot be created yet: {{ r.request_problem }}</p>
+{% endif %}
+{% for user in r.included if user.problem %}
+<p style="margin:0 0 8px;color:#b42318;">Warning: {{ user.username }}: {{ user.problem }}</p>
+{% endfor %}
+{% if r.changes is not none %}
+<p style="margin:0 0 16px;{{ muted }}">Since the last run: {{ r.changes["approved"] }} approved, {{ r.changes["declined"] }} declined, {{ r.changes["deleted"] }} deleted</p>
+{% endif %}
+{% for e in r.entries %}
+<h2 style="font-size:17px;margin:24px 0 4px;padding-top:16px;border-top:1px solid #e5e5e2;">{{ e.result.user.username }}</h2>
+<p style="margin:0 0 12px;font-size:13px;{{ muted }}">{{ e.result.history.seeds | length }} seeds, {{ e.result.history.abandoned | length }} abandoned</p>
+{% if e.result.picks is none %}
+<p style="margin:0;{{ muted }}">Skipped: {{ e.result.skipped }}</p>
+{% elif not e.result.picks.picks %}
+<p style="margin:0;{{ muted }}">No picks from {{ e.result.picks.candidates }} candidates</p>
+{% endif %}
+{% for pick in (e.result.picks.picks if e.result.picks else []) %}
+<div style="margin:0 0 14px;">
+<div style="font-weight:600;">{{ pick.title.title }}</div>
+<div style="font-size:13px;{{ muted }}">{{ pick.title.year or "?" }} &middot; {{ "Movie" if pick.title.media_type == "movie" else "TV" }} &middot; {{ pick.title.certification or "unrated" }} &middot; TMDB {{ "%.1f" | format(pick.title.vote_average) }}</div>
+<div style="font-size:14px;margin-top:2px;">{{ because(pick.candidate) }}</div>
+{% if e.requested %}
+{% set outcome = e.requested[loop.index0] %}
+{% if outcome.request_id %}
+<div style="font-size:13px;margin-top:2px;color:#1a7f37;">Requested in Seerr (#{{ outcome.request_id }})</div>
+{% else %}
+<div style="font-size:13px;margin-top:2px;color:#b42318;">Not requested: {{ outcome.error }}</div>
+{% endif %}
+{% endif %}
+</div>
+{% endfor %}
+{% endfor %}
+{% if r.excluded %}
+<p style="margin:24px 0 0;padding-top:16px;border-top:1px solid #e5e5e2;font-size:13px;{{ muted }}">Not included: {{ r.excluded | map(attribute="username") | join(", ") }}. Include one with <code>handpicked users set &lt;name&gt; --include</code>.</p>
+{% endif %}
+<p style="margin:24px 0 0;font-size:12px;{{ muted }}">
+{% if r.ingest %}
+Watch history: {{ r.ingest.new_events }} new events, {{ r.ingest.resolved }} titles resolved, {{ r.ingest.unresolved }} unresolved (retried next run)<br>
+{% endif %}
+{% if r.checked %}
+Age ratings: found for {{ r.rated }} of {{ r.checked }} titles checked ({{ "%.0f" | format(100 * r.rated / r.checked) }}%)
+{% endif %}
+</p>
+{% endif %}
+</div>
+</body>
+</html>

@@ -1,0 +1,50 @@
+{% if r.dry_run %}
+DRY RUN: nothing was requested in Seerr or recorded.
+{% endif %}
+{% if r.stopped %}
+The run stopped before making any picks:
+{{ r.stopped }}
+{% else %}
+{% if r.request_problem %}
+Warning: requests cannot be created yet: {{ r.request_problem }}
+{% endif %}
+{% for user in r.included if user.problem %}
+Warning: {{ user.username }}: {{ user.problem }}
+{% endfor %}
+{% if r.changes is not none %}
+Since the last run: {{ r.changes["approved"] }} approved, {{ r.changes["declined"] }} declined, {{ r.changes["deleted"] }} deleted
+{% endif %}
+{% for e in r.entries %}
+
+{{ e.result.user.username }} ({{ e.result.history.seeds | length }} seeds, {{ e.result.history.abandoned | length }} abandoned)
+{% if e.result.picks is none %}
+  Skipped: {{ e.result.skipped }}
+{% elif not e.result.picks.picks %}
+  No picks from {{ e.result.picks.candidates }} candidates
+{% endif %}
+{% for pick in (e.result.picks.picks if e.result.picks else []) %}
+  {{ loop.index }}. {{ pick.title.title }} ({{ pick.title.year or "?" }}, {{ "movie" if pick.title.media_type == "movie" else "TV" }}, {{ pick.title.certification or "unrated" }}, TMDB {{ "%.1f" | format(pick.title.vote_average) }})
+     {{ because(pick.candidate) }}
+{% if e.requested %}
+{% set outcome = e.requested[loop.index0] %}
+{% if outcome.request_id %}
+     Requested in Seerr (#{{ outcome.request_id }})
+{% else %}
+     Not requested: {{ outcome.error }}
+{% endif %}
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% if r.excluded %}
+
+Not included: {{ r.excluded | map(attribute="username") | join(", ") }}
+Include one with `handpicked users set <name> --include`.
+{% endif %}
+
+{% if r.ingest %}
+Watch history: {{ r.ingest.new_events }} new events, {{ r.ingest.resolved }} titles resolved, {{ r.ingest.unresolved }} unresolved (retried next run)
+{% endif %}
+{% if r.checked %}
+Age ratings: found for {{ r.rated }} of {{ r.checked }} titles checked ({{ "%.0f" | format(100 * r.rated / r.checked) }}%)
+{% endif %}
+{% endif %}

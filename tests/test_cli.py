@@ -177,6 +177,7 @@ def test_run_requests_picks_and_syncs(live_config, capsys, monkeypatch):
     assert "not requested: /request: Movie Quota exceeded." in out
     assert "1. Pick 12 (2020, movie, PG) score 1.20\n" in out
     assert "not requested: no matching Seerr user" in out
+    assert "Digest not configured, not sent" in out
     assert post.call_count == 2
 
     respx.get(f"{SEERR}/request/41").respond(json={"status": 3})
@@ -219,6 +220,94 @@ def test_dry_run_warns_and_requests_nothing(example_config, capsys, monkeypatch)
     assert not post.called
     conn = db.connect(example_config.parent / "handpicked.db")
     assert conn.execute("SELECT COUNT(*) FROM suggestions").fetchone()[0] == 0
+
+
+DIGEST = """
+digest:
+  host: smtp.example.com
+  sender: handpicked@example.com
+  recipients: [admin@example.com]
+"""
+
+
+@pytest.fixture
+def sent(monkeypatch):
+    messages = []
+    monkeypatch.setattr(cli.digest, "send", lambda _, message: messages.append(message))
+    return messages
+
+
+def add_digest(config):
+    config.write_text(config.read_text() + DIGEST)
+
+
+def text_part(message):
+    return next(message.iter_parts()).get_content()
+
+
+@respx.mock
+def test_dry_run_sends_the_digest(example_config, sent, capsys, monkeypatch):
+    add_digest(example_config)
+    mock_services(tautulli_users=[(111, "matt")])
+    matt = users.SeerrUser(id=1, plex_id=111, display_name="matt", permissions=32)
+    monkeypatch.setattr(
+        cli, "recommend", lambda *args: [user_picks(111, "matt", matt, 10)]
+    )
+
+    assert main(["run"]) == 0
+    (message,) = sent
+    assert message["Subject"] == "[DRY RUN] Handpicked: 1 pick for 1 person"
+    assert "1. Pick 10 (2020, movie, PG, TMDB 8.0)" in text_part(message)
+    assert "Digest sent to admin@example.com" in capsys.readouterr().out
+
+
+@respx.mock
+def test_real_run_digest_shows_what_seerr_did(live_config, sent, monkeypatch):
+    add_digest(live_config)
+    mock_services(tautulli_users=[(111, "matt")], seerr_users=[HANDPICKED])
+    matt = users.SeerrUser(id=1, plex_id=111, display_name="matt", permissions=32)
+    monkeypatch.setattr(
+        cli,
+        "recommend",
+        lambda *args: [
+            user_picks(111, "matt", matt, 10),
+            user_picks(333, "emma", None, 12),
+        ],
+    )
+    respx.post(f"{SEERR}/request").respond(201, json={"id": 41})
+    respx.put(f"{SEERR}/request/41").respond(json={"id": 41})
+
+    assert main(["run"]) == 0
+    text = text_part(sent[0])
+    assert "DRY RUN" not in text
+    assert "Since the last run: 0 approved, 0 declined, 0 deleted" in text
+    assert "Requested in Seerr (#41)" in text
+    assert "Not requested: no matching Seerr user" in text
+
+
+@respx.mock
+def test_stopped_run_still_sends_the_digest(live_config, sent):
+    add_digest(live_config)
+    mock_services(seerr_users=[seerr_user(5, "Handpicked", permissions=2)])
+
+    assert main(["run"]) == 1
+    (message,) = sent
+    assert message["Subject"] == "Handpicked: the run stopped"
+    assert "Cannot create requests: Seerr user Handpicked" in text_part(message)
+
+
+@respx.mock
+def test_digest_failure_fails_the_run(example_config, capsys, monkeypatch):
+    add_digest(example_config)
+    mock_services()
+
+    def refuse(settings, message):
+        raise cli.digest.DigestError("smtp.example.com:587: refused")
+
+    monkeypatch.setattr(cli.digest, "send", refuse)
+
+    assert main(["run"]) == 1
+    assert "Digest not sent: smtp.example.com:587: refused" in capsys.readouterr().err
 
 
 @respx.mock
