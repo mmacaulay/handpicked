@@ -8,7 +8,7 @@ from handpicked.config import Config
 from handpicked.picks import Picks, choose
 from handpicked.seeds import History
 from handpicked.seerr import Seerr
-from handpicked.tmdb import Tmdb
+from handpicked.tmdb import Tmdb, TmdbError
 from handpicked.users import User
 
 
@@ -28,7 +28,11 @@ def recommend(
     included: list[User],
     now: int,
 ) -> list[UserPicks]:
-    """Picks for each included user. Writes nothing but the TMDB cache."""
+    """Picks for each included user. Writes nothing but the TMDB cache.
+
+    A title goes to the first user with a Seerr link it is picked for, since
+    Seerr takes one request per title.
+    """
     if not included:
         return []
     owned_or_requested = seerr.owned() | seerr.requested() | seerr.blocklisted()
@@ -50,14 +54,22 @@ def recommend(
                     (user.user_id,),
                 )
             }
-            picks = choose(
-                history,
-                tmdb,
-                owned_or_requested | suggested | history.watched,
-                count=user.picks_per_run or config.picks_per_run,
-                max_age=user.max_age,
-                min_vote_count=config.thresholds.min_vote_count,
-            )
+            try:
+                picks = choose(
+                    history,
+                    tmdb,
+                    owned_or_requested | suggested | history.watched,
+                    count=user.picks_per_run or config.picks_per_run,
+                    max_age=user.max_age,
+                    min_vote_count=config.thresholds.min_vote_count,
+                )
+            except TmdbError as e:
+                results.append(UserPicks(user, history, None, f"TMDB error: {e}"))
+                continue
+            if user.seerr_user:  # without one, the picks cannot be requested
+                owned_or_requested |= {
+                    (p.candidate.media_type, p.candidate.tmdb_id) for p in picks.picks
+                }
             results.append(UserPicks(user, history, picks, None))
     finally:
         # Keep the TMDB responses fetched so far, on dry runs and on errors.

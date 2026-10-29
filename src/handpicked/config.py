@@ -34,13 +34,19 @@ class Service(Model):
     api_key: str
 
 
+class SeerrService(Service):
+    # The local Seerr user Handpicked creates requests as. Needed only when
+    # dry_run is off.
+    request_user_id: int | None = None
+
+
 class Tmdb(Model):
     token: str
 
 
 class Services(Model):
     tautulli: Service
-    seerr: Service
+    seerr: SeerrService
     tmdb: Tmdb
 
 
