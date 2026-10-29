@@ -171,7 +171,7 @@ def test_run_requests_picks_and_syncs(live_config, capsys, monkeypatch):
 
     assert main(["run"]) == 0
     out = capsys.readouterr().out
-    assert "Requests since last run: 0 approved, 0 declined" in out
+    assert "Requests since last run: 0 approved, 0 declined, 0 deleted" in out
     assert "1. Pick 10 (2020, movie, PG) score 1.20" in out
     assert "requested in Seerr (#41)" in out
     assert "not requested: /request: Movie Quota exceeded." in out
@@ -183,7 +183,7 @@ def test_run_requests_picks_and_syncs(live_config, capsys, monkeypatch):
     monkeypatch.setattr(cli, "recommend", lambda *args: [])
 
     assert main(["run"]) == 0
-    assert "Requests since last run: 0 approved, 1 declined" in capsys.readouterr().out
+    assert "0 approved, 1 declined, 0 deleted" in capsys.readouterr().out
     assert post.call_count == 2
 
 

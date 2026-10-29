@@ -10,7 +10,7 @@ from handpicked import db
 from handpicked.picks import Candidate, Pick
 from handpicked.pipeline import recommend
 from handpicked.seeds import Seed
-from handpicked.seerr import Seerr, SeerrUser
+from handpicked.seerr import Seerr, SeerrError, SeerrUser
 from handpicked.suggestions import request, request_user_problem, sync
 from handpicked.users import User
 
@@ -172,26 +172,89 @@ def suggest(conn, tmdb_id, request_id, status="requested"):
         )
 
 
+def not_found(request_id):
+    return respx.get(f"{URL}/request/{request_id}").respond(
+        404, json={"message": "Request not found."}
+    )
+
+
+def request_list(statuses):
+    return respx.get(f"{URL}/request").respond(
+        json={
+            "pageInfo": {"results": len(statuses)},
+            "results": [{"id": i, "status": s} for i, s in statuses.items()],
+        }
+    )
+
+
 @respx.mock
 def test_sync_records_the_admins_review(conn, seerr):
     # Seerr status: pending, approved, declined, failed, completed, deleted
-    for request_id, status in [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5)]:
-        respx.get(f"{URL}/request/{request_id}").respond(json={"status": status})
-    respx.get(f"{URL}/request/6").respond(404, json={"message": "Request not found."})
+    request_list({1: 1, 2: 2, 3: 3, 4: 4, 5: 5})
+    not_found(6)
     for request_id in range(1, 7):
         suggest(conn, 10 + request_id, request_id)
 
     changes = sync(conn, seerr, NOW)
 
-    assert changes == {"approved": 3, "declined": 1}
-    assert [(r["status"], r["approved_at"], r["declined_at"]) for r in rows(conn)] == [
-        ("requested", None, None),
-        ("approved", NOW, None),
-        ("declined", None, NOW),
-        ("approved", NOW, None),
-        ("approved", NOW, None),
-        ("requested", None, None),
+    assert changes == {"approved": 3, "declined": 1, "deleted": 1}
+    assert [
+        (r["status"], r["approved_at"], r["declined_at"], r["deleted_at"])
+        for r in rows(conn)
+    ] == [
+        ("requested", None, None, None),
+        ("approved", NOW, None, None),
+        ("declined", None, NOW, None),
+        ("approved", NOW, None, None),
+        ("approved", NOW, None, None),
+        ("deleted", None, None, NOW),
     ]
+
+
+@respx.mock
+def test_listed_requests_are_not_looked_up(conn, seerr):
+    request_list({1: 2})
+    route = respx.get(f"{URL}/request/1")
+    suggest(conn, 10, 1)
+
+    assert sync(conn, seerr, NOW) == {"approved": 1}
+    assert not route.called
+
+
+@respx.mock
+def test_request_missing_from_the_list_is_looked_up(conn, seerr):
+    # e.g. a blocklisted title, or skipped by paging while the list changed
+    request_list({})
+    respx.get(f"{URL}/request/1").respond(json={"status": 1})
+    respx.get(f"{URL}/request/2").respond(json={"status": 3})
+    suggest(conn, 10, 1)
+    suggest(conn, 11, 2)
+
+    assert sync(conn, seerr, NOW) == {"declined": 1}
+    assert [r["status"] for r in rows(conn)] == ["requested", "declined"]
+
+
+@respx.mock
+def test_failed_lookup_is_not_taken_for_deleted(conn, seerr):
+    request_list({})
+    respx.get(f"{URL}/request/1").respond(500, json={"message": "boom"})
+    suggest(conn, 10, 1)
+
+    with pytest.raises(SeerrError, match="boom"):
+        sync(conn, seerr, NOW)
+    assert rows(conn)[0]["status"] == "requested"
+
+
+@respx.mock
+def test_deleted_requests_are_not_checked_again(conn, seerr):
+    request_list({})
+    not_found(1)
+    suggest(conn, 10, 1)
+    sync(conn, seerr, NOW)
+    respx.reset()
+
+    assert sync(conn, seerr, NOW) == {}
+    assert not respx.calls
 
 
 @respx.mock

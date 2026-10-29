@@ -88,10 +88,7 @@ def request(
 
 
 def sync(conn: sqlite3.Connection, seerr: Seerr, now: int) -> Counter[str]:
-    """Record the admin's approvals and declines of open requests.
-
-    A request deleted in Seerr keeps its last known status.
-    """
+    """Record the admin's approvals, declines, and deletions of open requests."""
     changes: Counter[str] = Counter()
     rows = conn.execute(
         """
@@ -99,17 +96,31 @@ def sync(conn: sqlite3.Connection, seerr: Seerr, now: int) -> Counter[str]:
         WHERE status = 'requested' AND seerr_request_id IS NOT NULL
         """
     ).fetchall()
+    if not rows:
+        return changes
+    listed = seerr.request_statuses()
     for row in rows:
-        status = REVIEWED.get(seerr.request_status(row["seerr_request_id"]))
-        if status is None:
-            continue
-        with conn:
-            conn.execute(
-                f"UPDATE suggestions SET status = ?, {status}_at = ? WHERE id = ?",
-                (status, now, row["id"]),
-            )
-        changes[status] += 1
+        request_id = row["seerr_request_id"]
+        if request_id in listed:
+            seerr_status = listed[request_id]
+        else:
+            # The list leaves out blocklisted titles, and paging can skip a
+            # request if the list changes meanwhile. Seerr answers 404 for any
+            # failed lookup, so a request is deleted only if both miss it.
+            seerr_status = seerr.request_status(request_id)
+        status = "deleted" if seerr_status is None else REVIEWED.get(seerr_status)
+        if status is not None:
+            _record(conn, row["id"], status, now)
+            changes[status] += 1
     return changes
+
+
+def _record(conn: sqlite3.Connection, row_id: int, status: str, now: int) -> None:
+    with conn:
+        conn.execute(
+            f"UPDATE suggestions SET status = ?, {status}_at = ? WHERE id = ?",
+            (status, now, row_id),
+        )
 
 
 def _score_parts(candidate: Candidate) -> str:
