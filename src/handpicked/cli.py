@@ -155,16 +155,35 @@ def _run(
 ) -> int:
     dry_run = args.dry_run or config.dry_run
     print(f"handpicked run (dry_run={dry_run})")
+    report = Report(dry_run=dry_run)
+    try:
+        _run_steps(report, config, conn, tautulli, seerr)
+    except TautulliError as e:
+        report.stopped = f"Tautulli error: {e}"
+    except SeerrError as e:
+        report.stopped = f"Seerr error: {e}"
+    if report.stopped:
+        print(report.stopped, file=sys.stderr)
+    sent = _send_digest(config, report)
+    return 0 if sent and not report.stopped else 1
+
+
+def _run_steps(
+    report: Report,
+    config: Config,
+    conn: sqlite3.Connection,
+    tautulli: Tautulli,
+    seerr: Seerr,
+) -> None:
+    """Run the job, filling in the report. Sets report.stopped if it stops."""
+    dry_run = report.dry_run
     now = int(time.time())
 
     as_user = config.services.seerr.request_user_id
     problem = suggestions.request_user_problem(seerr.users(), as_user)
-    report = Report(dry_run=dry_run)
     if problem and not dry_run:
         report.stopped = f"Cannot create requests: {problem}"
-        print(report.stopped, file=sys.stderr)
-        _send_digest(config, report)
-        return 1
+        return
     if problem:
         report.request_problem = problem
         print(f"Warning: requests cannot be created yet: {problem}")
@@ -209,7 +228,6 @@ def _run(
             f"\nAge ratings: found for {report.rated} of {report.checked} titles"
             f" checked ({report.rated / report.checked:.0%})"
         )
-    return 0 if _send_digest(config, report) else 1
 
 
 def _send_digest(config: Config, report: Report) -> bool:

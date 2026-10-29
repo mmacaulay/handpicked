@@ -22,7 +22,7 @@
 {% endif %}
 {% for e in r.entries %}
 <h2 style="font-size:17px;margin:24px 0 4px;padding-top:16px;border-top:1px solid #e5e5e2;">{{ e.result.user.username }}</h2>
-<p style="margin:0 0 12px;font-size:13px;{{ muted }}">{{ e.result.history.seeds | length }} seeds, {{ e.result.history.abandoned | length }} abandoned</p>
+<p style="margin:0 0 12px;font-size:13px;{{ muted }}">{{ e.result.history.seeds | length }} seeds, {{ e.result.history.abandoned | length }} abandoned{% if e.result.history.unresolved %}, {{ e.result.history.unresolved }} recent titles skipped (no TMDB id){% endif %}</p>
 {% if e.result.picks is none %}
 <p style="margin:0;{{ muted }}">Skipped: {{ e.result.skipped }}</p>
 {% elif not e.result.picks.picks %}

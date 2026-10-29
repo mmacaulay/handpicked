@@ -297,6 +297,18 @@ def test_stopped_run_still_sends_the_digest(live_config, sent):
 
 
 @respx.mock
+def test_service_error_still_sends_the_digest(example_config, sent, capsys):
+    add_digest(example_config)
+    respx.get(f"{SEERR}/user").respond(500, json={"message": "boom"})
+
+    assert main(["run"]) == 1
+    assert "Seerr error: /user: boom" in capsys.readouterr().err
+    (message,) = sent
+    assert message["Subject"] == "[DRY RUN] Handpicked: the run stopped"
+    assert "Seerr error: /user: boom" in text_part(message)
+
+
+@respx.mock
 def test_digest_failure_fails_the_run(example_config, capsys, monkeypatch):
     add_digest(example_config)
     mock_services()

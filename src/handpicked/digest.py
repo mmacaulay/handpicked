@@ -5,7 +5,8 @@ import ssl
 from collections import Counter
 from dataclasses import dataclass, field
 from email.message import EmailMessage
-from email.utils import formatdate, make_msgid
+from email.utils import formatdate, make_msgid, parseaddr
+from functools import cache
 
 from jinja2 import Environment, PackageLoader, StrictUndefined
 
@@ -73,6 +74,7 @@ def _titles(titles: list[str], limit: int = 3) -> str:
     return f"{', '.join(titles[:-1])} and {titles[-1]}"
 
 
+@cache
 def _environment(autoescape: bool) -> Environment:
     env = Environment(
         loader=PackageLoader("handpicked"),
@@ -84,10 +86,6 @@ def _environment(autoescape: bool) -> Environment:
     )
     env.globals["because"] = because
     return env
-
-
-_TEXT = _environment(autoescape=False)
-_HTML = _environment(autoescape=True)
 
 
 def subject(report: Report) -> str:
@@ -108,11 +106,12 @@ def render(report: Report, settings: Digest) -> EmailMessage:
     message["From"] = settings.sender
     message["To"] = ", ".join(settings.recipients)
     message["Date"] = formatdate(localtime=True)
-    message["Message-ID"] = make_msgid(domain=settings.sender.rpartition("@")[2])
-    message.set_content(_TEXT.get_template("digest.txt.j2").render(r=report))
-    message.add_alternative(
-        _HTML.get_template("digest.html.j2").render(r=report), subtype="html"
-    )
+    domain = parseaddr(settings.sender)[1].rpartition("@")[2]
+    message["Message-ID"] = make_msgid(domain=domain or None)
+    text = _environment(autoescape=False).get_template("digest.txt.j2")
+    html = _environment(autoescape=True).get_template("digest.html.j2")
+    message.set_content(text.render(r=report))
+    message.add_alternative(html.render(r=report), subtype="html")
     return message
 
 
@@ -126,11 +125,25 @@ def send(settings: Digest, message: EmailMessage) -> None:
             )
         else:
             smtp = smtplib.SMTP(settings.host, port, timeout=TIMEOUT)
-        with smtp:
+        # Closed without QUIT: a server that answers QUIT with an error after
+        # taking the message would otherwise turn a sent digest into a failure.
+        try:
             if settings.security == "starttls":
                 smtp.starttls(context=context)
             if settings.username:
-                smtp.login(settings.username, settings.password or "")
+                _login(smtp, settings)
             smtp.send_message(message)
+        finally:
+            smtp.close()
     except (smtplib.SMTPException, OSError) as e:
         raise DigestError(f"{settings.host}:{port}: {e}") from e
+
+
+def _login(smtp: smtplib.SMTP, settings: Digest) -> None:
+    try:
+        smtp.login(settings.username or "", settings.password or "")
+    except UnicodeEncodeError:
+        # The error quotes part of the password, so leave it out.
+        raise smtplib.SMTPException(
+            "SMTP login needs an ASCII username and password"
+        ) from None

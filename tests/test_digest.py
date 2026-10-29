@@ -37,7 +37,11 @@ def pick(tmdb_id, name, media_type="movie", certification="PG", poster=None):
 def entry(name, picks, requested=None):
     result = UserPicks(
         user(1, name),
-        History(seeds=list(SEEDS), abandoned=[Seed("movie", 3, "Dropped", -0.5)]),
+        History(
+            seeds=list(SEEDS),
+            abandoned=[Seed("movie", 3, "Dropped", -0.5)],
+            unresolved=2,
+        ),
         Picks(picks, candidates=10, checked=4, rated=3),
         None,
     )
@@ -89,13 +93,24 @@ def test_digest_is_multipart_with_both_bodies():
     assert message["Message-ID"].endswith("@example.com>")
 
 
+def test_message_id_uses_the_sender_domain_with_a_display_name():
+    settings = SETTINGS.model_copy(
+        update={"sender": "Handpicked <handpicked@example.org>"}
+    )
+
+    message = render(report(), settings)
+
+    assert message["Message-ID"].endswith("@example.org>")
+    assert message["From"] == "Handpicked <handpicked@example.org>"
+
+
 def test_text_shows_each_pick_with_its_seeds_and_outcome():
     text, _ = parts(render(report(), SETTINGS))
 
     assert "DRY RUN" not in text
     assert "Since the last run: 2 approved, 0 declined, 1 deleted" in text
     assert "Warning: adult: no matching Seerr user" in text
-    assert "kid (2 seeds, 1 abandoned)" in text
+    assert "kid (2 seeds, 1 abandoned, 2 recent titles skipped (no TMDB id))" in text
     assert "  1. Tom & Jerry <Uncut> (2020, movie, PG, TMDB 7.8)" in text
     assert "     because you finished Seed One and Seed Two" in text
     assert "     Requested in Seerr (#41)" in text
@@ -165,11 +180,8 @@ class FakeSMTP:
         self.calls = []
         FakeSMTP.instances.append(self)
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self.calls.append("quit")
+    def close(self):
+        self.calls.append("close")
 
     def starttls(self, context=None):
         assert context is not None
@@ -200,7 +212,7 @@ def test_starttls_logs_in_and_sends(smtp):
         "starttls",
         ("login", "me@example.com", "secret"),
         ("send", "Handpicked: 2 picks for 2 people"),
-        "quit",
+        "close",
     ]
 
 
@@ -237,6 +249,33 @@ def test_smtp_failure_raises_digest_error(monkeypatch):
 
     with pytest.raises(DigestError, match="smtp.example.com:587: .*authentication"):
         send(SETTINGS, render(report(), SETTINGS))
+
+
+def test_non_ascii_password_error_leaves_the_password_out(monkeypatch):
+    class Encoding(FakeSMTP):
+        def login(self, username, password):
+            password.encode("ascii")
+
+    monkeypatch.setattr(digest.smtplib, "SMTP", Encoding)
+    settings = SETTINGS.model_copy(update={"password": "s\u00e9cret"})
+
+    with pytest.raises(DigestError, match="needs an ASCII") as error:
+        send(settings, render(report(), settings))
+    assert "\u00e9" not in str(error.value)
+    assert error.value.__cause__.__cause__ is None
+
+
+def test_server_closed_even_when_sending_fails(monkeypatch):
+    class Refusing(FakeSMTP):
+        def send_message(self, message):
+            raise smtplib.SMTPRecipientsRefused({})
+
+    monkeypatch.setattr(digest.smtplib, "SMTP", Refusing)
+    FakeSMTP.instances = []
+
+    with pytest.raises(DigestError):
+        send(SETTINGS, render(report(), SETTINGS))
+    assert FakeSMTP.instances[0].calls[-1] == "close"
 
 
 def test_connection_failure_raises_digest_error(monkeypatch):
