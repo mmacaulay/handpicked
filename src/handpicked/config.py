@@ -89,6 +89,7 @@ class Config(Model):
     @classmethod
     def _check_schedule(cls, schedule: str) -> str:
         fields = schedule.split()
+        # Before parsing, which rejects 7 (Sunday in cron) as out of range.
         if len(fields) == 5 and any(c.isdigit() for c in fields[4]):
             raise ValueError(
                 "name the day of the week (SUN, MON-FRI): the scheduler counts"
@@ -98,6 +99,14 @@ class Config(Model):
             CronTrigger.from_crontab(schedule, timezone="UTC")
         except ValueError as e:
             raise ValueError(f"not a valid cron expression: {e}") from e
+        _, _, day, _, weekday = fields
+        # Cron runs on either day when both are restricted; the scheduler
+        # needs both to match. They agree when either starts with "*".
+        if not day.startswith("*") and not weekday.startswith("*"):
+            raise ValueError(
+                "set a day of the month or a day of the week, not both: the"
+                " scheduler requires both to match, where cron needs either"
+            )
         return schedule
 
 

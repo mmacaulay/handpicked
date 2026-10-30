@@ -27,8 +27,9 @@ dry_run: true
 
 # Cron expression for the run (default: Sundays at 09:00), in the container's
 # time zone (TZ). Name the day of the week (SUN, MON-FRI): numbers are
-# rejected, since the scheduler counts 0 as Monday, not Sunday. Changes take
-# effect after a restart.
+# rejected, since the scheduler counts 0 as Monday, not Sunday. Set a day of
+# the month or a day of the week, not both. Changes to the schedule take effect
+# after a restart; other settings apply from the next run.
 schedule: "0 9 * * SUN"
 
 # Default picks per included user per run.

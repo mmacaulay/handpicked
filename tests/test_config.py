@@ -94,7 +94,9 @@ def test_config_path_from_env():
     )
 
 
-@pytest.mark.parametrize("schedule", ["0 9 * * SUN", "30 6 * * MON-FRI", "0 9 1 * *"])
+@pytest.mark.parametrize(
+    "schedule", ["0 9 * * SUN", "30 6 * * MON-FRI", "0 9 1 * *", "0 9 */2 * MON"]
+)
 def test_schedule_accepts_cron_with_day_names(tmp_path, schedule):
     text = MINIMAL + f'schedule: "{schedule}"\n'
 
@@ -106,8 +108,11 @@ def test_schedule_accepts_cron_with_day_names(tmp_path, schedule):
     [
         ("0 9 * * 0", "name the day of the week"),
         ("0 9 * * 1-5", "name the day of the week"),
+        ("0 9 * * 7", "name the day of the week"),
+        ("0 9 1,15 * MON", "not both"),
         ("0 9 * *", "not a valid cron expression"),
         ("0 25 * * SUN", "not a valid cron expression"),
+        ("0 9 ? * MON", "not a valid cron expression"),
     ],
 )
 def test_schedule_rejects_numeric_days_and_bad_cron(tmp_path, schedule, message):
