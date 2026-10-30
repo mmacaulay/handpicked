@@ -4,7 +4,7 @@ import pytest
 
 from handpicked.config import ConfigError, config_path, load_config
 
-EXAMPLE = Path(__file__).parent.parent / "config.example.yml"
+EXAMPLE = Path(__file__).parent.parent / "src" / "handpicked" / "config.example.yml"
 
 MINIMAL = """
 services:
@@ -92,3 +92,26 @@ def test_config_path_from_env():
     assert config_path({"HANDPICKED_CONFIG": "dev/config.yml"}) == Path(
         "dev/config.yml"
     )
+
+
+@pytest.mark.parametrize("schedule", ["0 9 * * SUN", "30 6 * * MON-FRI", "0 9 1 * *"])
+def test_schedule_accepts_cron_with_day_names(tmp_path, schedule):
+    text = MINIMAL + f'schedule: "{schedule}"\n'
+
+    assert load_config(write(tmp_path, text), environ={}).schedule == schedule
+
+
+@pytest.mark.parametrize(
+    ("schedule", "message"),
+    [
+        ("0 9 * * 0", "name the day of the week"),
+        ("0 9 * * 1-5", "name the day of the week"),
+        ("0 9 * *", "not a valid cron expression"),
+        ("0 25 * * SUN", "not a valid cron expression"),
+    ],
+)
+def test_schedule_rejects_numeric_days_and_bad_cron(tmp_path, schedule, message):
+    text = MINIMAL + f'schedule: "{schedule}"\n'
+
+    with pytest.raises(ConfigError, match=message):
+        load_config(write(tmp_path, text), environ={})

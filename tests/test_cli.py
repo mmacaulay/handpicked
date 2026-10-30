@@ -1,4 +1,6 @@
+import fcntl
 import shutil
+import threading
 from pathlib import Path
 
 import httpx
@@ -12,7 +14,7 @@ from handpicked.pipeline import UserPicks
 from handpicked.seeds import History, Seed
 from handpicked.tmdb import Title
 
-EXAMPLE = Path(__file__).parent.parent / "config.example.yml"
+EXAMPLE = Path(__file__).parent.parent / "src" / "handpicked" / "config.example.yml"
 TAUTULLI = "http://tautulli:8181/api/v2"
 SEERR = "http://seerr:5055/api/v1"
 
@@ -457,3 +459,60 @@ def test_invalid_config_exits_with_error(tmp_path, monkeypatch, capsys):
 
     assert main(["run"]) == 2
     assert "Invalid config" in capsys.readouterr().err
+
+
+@respx.mock
+def test_a_run_in_progress_blocks_another(example_config, capsys):
+    mock_services()
+    with open(example_config.parent / "handpicked.lock", "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        assert main(["run"]) == 1
+    assert "A run is already in progress" in capsys.readouterr().err
+    assert main(["run"]) == 0
+
+
+def test_serve_creates_a_missing_config_and_exits(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "config.yml"
+    monkeypatch.setenv("HANDPICKED_CONFIG", str(path))
+
+    assert main(["serve"]) == 2
+    assert path.read_text() == EXAMPLE.read_text()
+    assert "Edit it, then restart" in capsys.readouterr().err
+
+
+def test_run_does_not_create_a_missing_config(tmp_path, monkeypatch):
+    path = tmp_path / "config.yml"
+    monkeypatch.setenv("HANDPICKED_CONFIG", str(path))
+
+    assert main(["run"]) == 2
+    assert not path.exists()
+
+
+@respx.mock
+def test_scheduled_run_works_off_the_main_thread(example_config, caplog):
+    mock_services(tautulli_users=[(111, "matt")])
+    errors = []
+
+    def job():
+        try:
+            cli._scheduled_run()
+        except Exception as e:
+            errors.append(e)
+
+    thread = threading.Thread(target=job)
+    thread.start()
+    thread.join(10)
+
+    assert errors == []
+    conn = db.connect(example_config.parent / "handpicked.db")
+    assert conn.execute("SELECT username FROM users").fetchall()[0][0] == "matt"
+    assert "Run exited" not in caplog.text
+
+
+def test_scheduled_run_logs_a_failed_run(example_config, caplog, monkeypatch):
+    monkeypatch.setattr(cli, "main", lambda argv: 1)
+
+    cli._scheduled_run()
+
+    assert "Run exited with status 1" in caplog.text

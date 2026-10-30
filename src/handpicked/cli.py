@@ -1,9 +1,15 @@
 import argparse
+import fcntl
+import logging
 import sqlite3
 import sys
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from importlib.resources import files
+from pathlib import Path
 
-from handpicked import db, digest, suggestions, users
+from handpicked import db, digest, serve, suggestions, users
 from handpicked.config import Config, ConfigError, config_path, load_config
 from handpicked.digest import Entry, Report, because
 from handpicked.ingest import ingest
@@ -13,11 +19,15 @@ from handpicked.suggestions import Requested
 from handpicked.tautulli import Tautulli, TautulliError
 from handpicked.tmdb import Tmdb, TmdbCache
 
+EXAMPLE_CONFIG = files("handpicked") / "config.example.yml"
+
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
 
     path = config_path()
+    if args.command == "serve" and not path.exists():
+        return _create_config(path)
     try:
         config = load_config(path)
     except ConfigError as e:
@@ -25,13 +35,32 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     conn = db.connect(path.parent / "handpicked.db")
-    db.migrate(conn)
+    try:
+        db.migrate(conn)
+        if args.command == "serve":
+            conn.close()
+            logging.basicConfig(
+                level=logging.INFO,
+                format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+            )
+            return serve.serve(config.schedule, _scheduled_run)
+        return _command(args, config, path, conn)
+    finally:
+        conn.close()
 
+
+def _command(
+    args: argparse.Namespace, config: Config, path: Path, conn: sqlite3.Connection
+) -> int:
     tautulli = Tautulli(config.services.tautulli.url, config.services.tautulli.api_key)
     seerr = Seerr(config.services.seerr.url, config.services.seerr.api_key)
     try:
         if args.command == "run":
-            return _run(args, config, conn, tautulli, seerr)
+            with _run_lock(path.parent) as locked:
+                if not locked:
+                    print("A run is already in progress", file=sys.stderr)
+                    return 1
+                return _run(args, config, conn, tautulli, seerr)
         if args.users_command == "set":
             changes = {k: getattr(args, k) for k in users.SETTINGS if hasattr(args, k)}
             if not changes:
@@ -67,6 +96,10 @@ def _parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Compute and report, write nothing (overrides config)",
+    )
+
+    commands.add_parser(
+        "serve", help="Run on the configured schedule until stopped (the container)"
     )
 
     users_parser = commands.add_parser(
@@ -134,6 +167,35 @@ def _parser() -> argparse.ArgumentParser:
     link.add_argument("username")
     link.add_argument("seerr_user_id", type=int)
     return parser
+
+
+def _create_config(path: Path) -> int:
+    try:
+        path.write_text(EXAMPLE_CONFIG.read_text())
+    except OSError as e:
+        print(f"No config at {path}, and cannot create one: {e}", file=sys.stderr)
+        return 2
+    print(f"Created {path} from the example. Edit it, then restart.", file=sys.stderr)
+    return 2
+
+
+@contextmanager
+def _run_lock(directory: Path) -> Iterator[bool]:
+    """Hold a lock for one run, so a manual and a scheduled run cannot overlap."""
+    with open(directory / "handpicked.lock", "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        yield True
+
+
+def _scheduled_run() -> None:
+    """One scheduled run. Config is loaded again, so edits apply without a restart."""
+    status = main(["run"])
+    if status:
+        logging.getLogger("handpicked").warning("Run exited with status %d", status)
 
 
 def _at_least(minimum: int):

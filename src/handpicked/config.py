@@ -6,7 +6,14 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from apscheduler.triggers.cron import CronTrigger
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+)
 
 DEFAULT_CONFIG_PATH = Path("/config/config.yml")
 
@@ -77,6 +84,21 @@ class Config(Model):
     picks_per_run: int = Field(3, ge=1)
     thresholds: Thresholds = Field(default_factory=Thresholds)
     digest: Digest | None = None
+
+    @field_validator("schedule")
+    @classmethod
+    def _check_schedule(cls, schedule: str) -> str:
+        fields = schedule.split()
+        if len(fields) == 5 and any(c.isdigit() for c in fields[4]):
+            raise ValueError(
+                "name the day of the week (SUN, MON-FRI): the scheduler counts"
+                " 0 as Monday, not Sunday"
+            )
+        try:
+            CronTrigger.from_crontab(schedule, timezone="UTC")
+        except ValueError as e:
+            raise ValueError(f"not a valid cron expression: {e}") from e
+        return schedule
 
 
 def config_path(environ: Mapping[str, str] = os.environ) -> Path:
