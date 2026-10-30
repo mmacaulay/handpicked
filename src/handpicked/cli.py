@@ -1,6 +1,5 @@
 import argparse
 import fcntl
-import logging
 import os
 import sqlite3
 import sys
@@ -199,7 +198,7 @@ def _scheduled_run() -> None:
     """One scheduled run. Config is loaded again, so edits apply without a restart."""
     status = main(["run"])
     if status:
-        logging.getLogger("handpicked").warning("Run exited with status %d", status)
+        serve.log.warning("Run exited with status %d", status)
 
 
 def _at_least(minimum: int):

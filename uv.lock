@@ -74,6 +74,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "tzdata" },
+    { name = "tzlocal" },
 ]
 
 [package.dev-dependencies]
@@ -91,6 +92,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.14.1" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "tzdata", specifier = ">=2026.6" },
+    { name = "tzlocal", specifier = ">=5.4" },
 ]
 
 [package.metadata.requires-dev]
