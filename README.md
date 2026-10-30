@@ -15,7 +15,7 @@ See `docs/PRODUCT.md` for the why and `docs/V1.md` for the spec.
    docker exec handpicked handpicked users set <name> --include --max-age 12
    ```
 5. **Try a dry run.** `docker exec handpicked handpicked run --dry-run` prints the picks and emails a digest marked DRY RUN. Nothing is requested in Seerr.
-6. **Go live.** Create the Seerr request user and set `services.seerr.request_user_id` (the comments in `config.yml` explain it), then set `dry_run: false` and restart. Runs follow `schedule` (default Sundays at 09:00, in the container's `TZ`), and the log shows the next run time.
+6. **Go live.** Create the Seerr request user and set `services.seerr.request_user_id` (the comments in `config.yml` explain it), then set `dry_run: false`. Config changes apply from the next run; only a change to `schedule` needs a restart. Runs follow `schedule` (default Sundays at 09:00, in the container's `TZ`), and the log shows the next run time.
 
 Stopping the container lets a run in progress finish first, for up to 5 minutes. A manual run while another is in progress exits with "A run is already in progress".
 
