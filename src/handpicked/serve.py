@@ -17,6 +17,16 @@ JOB_ID = "run"
 MISFIRE_GRACE = 60 * 60
 
 
+def configure_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    # httpx logs every request URL at INFO, and Tautulli takes its API key
+    # as a query parameter.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
 def scheduler(schedule: str, job: Callable[[], object]) -> BlockingScheduler:
     scheduler = BlockingScheduler(
         executors={"default": ThreadPoolExecutor(1)},

@@ -4,7 +4,9 @@ import signal
 import threading
 from datetime import datetime
 
+import httpx
 import pytest
+import respx
 
 from handpicked import serve
 
@@ -75,3 +77,18 @@ def test_sigterm_waits_for_a_run_in_progress(restore_signals, monkeypatch):
 
     assert serve.serve("0 9 * * SUN", job) == 0
     assert finished.is_set()
+
+
+@respx.mock
+def test_logging_keeps_request_urls_with_keys_out(caplog):
+    httpx_logger = logging.getLogger("httpx")
+    respx.get("http://tautulli:8181/api/v2").respond(json={})
+    try:
+        serve.configure_logging()
+        caplog.set_level(logging.INFO)
+
+        httpx.get("http://tautulli:8181/api/v2?apikey=secret")
+    finally:
+        httpx_logger.setLevel(logging.NOTSET)
+
+    assert "secret" not in caplog.text

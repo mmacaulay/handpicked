@@ -40,10 +40,7 @@ def main(argv: list[str] | None = None) -> int:
         db.migrate(conn)
         if args.command == "serve":
             conn.close()
-            logging.basicConfig(
-                level=logging.INFO,
-                format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-            )
+            serve.configure_logging()
             return serve.serve(config.schedule, _scheduled_run)
         return _command(args, config, path, conn)
     finally:
