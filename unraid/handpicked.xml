@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<Container version="2">
+    <Name>handpicked</Name>
+    <Repository>ghcr.io/mmacaulay/handpicked:latest</Repository>
+    <Registry>https://github.com/mmacaulay/handpicked/pkgs/container/handpicked</Registry>
+    <Network>bridge</Network>
+    <Privileged>false</Privileged>
+    <Support>https://github.com/mmacaulay/handpicked/issues</Support>
+    <Shell>bash</Shell>
+    <Project>https://github.com/mmacaulay/handpicked</Project>
+    <ReadMe>https://github.com/mmacaulay/handpicked#readme</ReadMe>
+    <Overview>Household-curator recommender for Plex. Each week it picks a few titles for each household member from their Tautulli watch history and TMDB recommendations, queues them as pending requests in Seerr on their behalf, and emails the admin a digest of who each pick is for and why. On first start it creates config.yml in the appdata folder and exits: edit it, then start the container again. Manual runs: docker exec handpicked handpicked run --dry-run</Overview>
+    <Category>MediaApp:Other Tools:</Category>
+    <WebUI/>
+    <TemplateURL>https://raw.githubusercontent.com/mmacaulay/handpicked/main/unraid/handpicked.xml</TemplateURL>
+    <Icon/>
+    <!-- Room for a run in progress to finish on stop, so a Seerr request is never left unrecorded. -->
+    <ExtraParams>--stop-timeout=300</ExtraParams>
+    <PostArgs/>
+    <Config Name="Appdata" Target="/config" Default="/mnt/user/appdata/handpicked" Mode="rw" Description="config.yml, the SQLite database, and the run lock" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/handpicked</Config>
+    <Config Name="Tautulli API key" Target="HANDPICKED_TAUTULLI_API_KEY" Default="" Description="Overrides services.tautulli.api_key in config.yml" Type="Variable" Display="always" Required="false" Mask="true"/>
+    <Config Name="Seerr API key" Target="HANDPICKED_SEERR_API_KEY" Default="" Description="Overrides services.seerr.api_key in config.yml" Type="Variable" Display="always" Required="false" Mask="true"/>
+    <Config Name="TMDB read access token" Target="HANDPICKED_TMDB_TOKEN" Default="" Description="Overrides services.tmdb.token in config.yml" Type="Variable" Display="always" Required="false" Mask="true"/>
+    <Config Name="SMTP password" Target="HANDPICKED_SMTP_PASSWORD" Default="" Description="Overrides digest.password in config.yml. Use an app password where the provider offers one." Type="Variable" Display="always" Required="false" Mask="true"/>
+</Container>
