@@ -3,10 +3,10 @@ import sqlite3
 import sys
 import time
 
-from handpicked import db, suggestions, users
+from handpicked import db, digest, suggestions, users
 from handpicked.config import Config, ConfigError, config_path, load_config
+from handpicked.digest import Entry, Report, because
 from handpicked.ingest import ingest
-from handpicked.picks import Candidate
 from handpicked.pipeline import UserPicks, recommend
 from handpicked.seerr import Seerr, SeerrError
 from handpicked.suggestions import Requested
@@ -155,23 +155,56 @@ def _run(
 ) -> int:
     dry_run = args.dry_run or config.dry_run
     print(f"handpicked run (dry_run={dry_run})")
+    report = Report(dry_run=dry_run)
+    unexpected = None
+    try:
+        _run_steps(report, config, conn, tautulli, seerr)
+    except TautulliError as e:
+        report.stopped = f"Tautulli error: {e}"
+    except SeerrError as e:
+        report.stopped = f"Seerr error: {e}"
+    except Exception as e:
+        # Its message could quote a URL with an API key, so keep it out of
+        # the email. The traceback goes to the logs once the digest is sent.
+        unexpected = e
+        report.stopped = f"Unexpected error ({type(e).__name__}), see the logs"
+    if report.stopped:
+        print(report.stopped, file=sys.stderr)
+    try:
+        sent = _send_digest(config, report)
+    finally:
+        if unexpected is not None:
+            raise unexpected
+    return 0 if sent and not report.stopped else 1
+
+
+def _run_steps(
+    report: Report,
+    config: Config,
+    conn: sqlite3.Connection,
+    tautulli: Tautulli,
+    seerr: Seerr,
+) -> None:
+    """Run the job, filling in the report. Sets report.stopped if it stops."""
+    dry_run = report.dry_run
     now = int(time.time())
 
     as_user = config.services.seerr.request_user_id
     problem = suggestions.request_user_problem(seerr.users(), as_user)
     if problem and not dry_run:
-        print(f"Cannot create requests: {problem}", file=sys.stderr)
-        return 1
+        report.stopped = f"Cannot create requests: {problem}"
+        return
     if problem:
+        report.request_problem = problem
         print(f"Warning: requests cannot be created yet: {problem}")
     if not dry_run:
-        changes = suggestions.sync(conn, seerr, now)
+        changes = report.changes = suggestions.sync(conn, seerr, now)
         print(
             f"Requests since last run: {changes['approved']} approved,"
             f" {changes['declined']} declined, {changes['deleted']} deleted"
         )
 
-    stats = ingest(conn, tautulli)
+    stats = report.ingest = ingest(conn, tautulli)
     print(
         f"Watch history: {stats.new_events} new events,"
         f" {stats.resolved} titles resolved,"
@@ -179,8 +212,8 @@ def _run(
     )
 
     household = users.discover(conn, tautulli, seerr)
-    included = [u for u in household if u.include]
-    excluded = [u for u in household if not u.include]
+    included = report.included = [u for u in household if u.include]
+    excluded = report.excluded = [u for u in household if not u.include]
     print(f"Users: {_count(included, 'included')}, {_count(excluded, 'not included')}")
     for user in included:
         if user.problem:
@@ -199,14 +232,26 @@ def _run(
                 reason = result.user.problem or "no Seerr user"
                 requested = [Requested(p, None, reason) for p in result.picks.picks]
         _print_picks(result, requested)
-    checked = sum(r.picks.checked for r in results if r.picks)
-    if checked:
-        rated = sum(r.picks.rated for r in results if r.picks)
+        report.entries.append(Entry(result, requested))
+    if report.checked:
         print(
-            f"\nAge ratings: found for {rated} of {checked} titles checked"
-            f" ({rated / checked:.0%})"
+            f"\nAge ratings: found for {report.rated} of {report.checked} titles"
+            f" checked ({report.rated / report.checked:.0%})"
         )
-    return 0
+
+
+def _send_digest(config: Config, report: Report) -> bool:
+    """Email the digest if one is configured. False if sending failed."""
+    if config.digest is None:
+        print("\nDigest not configured, not sent")
+        return True
+    try:
+        digest.send(config.digest, digest.render(report, config.digest))
+    except digest.DigestError as e:
+        print(f"Digest not sent: {e}", file=sys.stderr)
+        return False
+    print(f"\nDigest sent to {', '.join(config.digest.recipients)}")
+    return True
 
 
 def _print_picks(result: UserPicks, requested: list[Requested] | None) -> None:
@@ -233,7 +278,7 @@ def _print_picks(result: UserPicks, requested: list[Requested] | None) -> None:
             f"  {i}. {title.title} ({title.year or '?'}, {kind},"
             f" {title.certification or 'unrated'}) score {candidate.score:.2f}"
         )
-        print(f"     {_because(candidate)}")
+        print(f"     {because(candidate)}")
         if requested:
             outcome = requested[i - 1]
             print(
@@ -241,25 +286,6 @@ def _print_picks(result: UserPicks, requested: list[Requested] | None) -> None:
                 if outcome.request_id
                 else f"     not requested: {outcome.error}"
             )
-
-
-def _because(candidate: Candidate) -> str:
-    finished = sorted(
-        (s for s in candidate.seeds if s.weight > 0), key=lambda s: -s.weight
-    )
-    abandoned = [s for s in candidate.seeds if s.weight < 0]
-    reason = f"because you finished {_titles([s.title for s in finished])}"
-    if abandoned:
-        reason += f", despite abandoning {_titles([s.title for s in abandoned])}"
-    return reason
-
-
-def _titles(titles: list[str], limit: int = 3) -> str:
-    if len(titles) > limit:
-        titles = titles[:limit] + [f"{len(titles) - limit} more"]
-    if len(titles) == 1:
-        return titles[0]
-    return f"{', '.join(titles[:-1])} and {titles[-1]}"
 
 
 def _count(group: list[users.User], label: str) -> str:

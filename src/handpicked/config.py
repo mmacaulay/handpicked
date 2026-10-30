@@ -62,7 +62,7 @@ class Thresholds(Model):
 
 class Digest(Model):
     host: str
-    port: int = 587
+    port: int | None = None  # 465 for ssl, 587 for starttls, 25 for none
     security: Literal["starttls", "ssl", "none"] = "starttls"
     username: str | None = None
     password: str | None = None

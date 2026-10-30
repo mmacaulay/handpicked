@@ -22,7 +22,7 @@ Read both before making design decisions. Stay within v1 scope unless asked; do 
 
 - The `suggestions` table and its lifecycle are the core data model. Changes to it need deliberate thought.
 - Scoring must stay explainable: every suggestion records the seeds that produced it.
-- Every write to an external service must respect dry-run mode.
+- Every write to an external service must respect dry-run mode. The one exception is the admin digest email, which dry runs send on purpose, marked "DRY RUN".
 - The core pipeline must work with no LLM configured. Any LLM features are optional and bring-your-own-key.
 - Keep integration clients thin and isolated so they can be mocked in tests.
 - Never use em dashes in code comments, docs, commit messages, or any other writing in this repo.

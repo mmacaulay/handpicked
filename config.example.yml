@@ -42,11 +42,13 @@ thresholds:
 # Users are not configured here. Run `handpicked users` to list them and
 # `handpicked users set <name> --include` to opt one in.
 
-# Weekly digest email to the admin. Optional until the digest is set up.
+# Weekly digest email to the admin, sent after every run, dry runs included.
+# Optional until the digest is set up. Use an app password where the mail
+# provider offers one (Gmail, iCloud), not the account password.
 # digest:
 #   host: smtp.example.com
-#   port: 587
 #   security: starttls   # starttls, ssl, or none
+#   port: 587            # defaults to 587 for starttls, 465 for ssl, 25 for none
 #   username: handpicked@example.com
 #   password: your-smtp-password
 #   sender: handpicked@example.com
