@@ -1,4 +1,5 @@
 import fcntl
+import os
 import shutil
 import threading
 from pathlib import Path
@@ -516,3 +517,14 @@ def test_scheduled_run_logs_a_failed_run(example_config, caplog, monkeypatch):
     cli._scheduled_run()
 
     assert "Run exited with status 1" in caplog.text
+
+
+def test_serve_explains_an_unwritable_config_folder(tmp_path, monkeypatch, capsys):
+    folder = tmp_path / "appdata"
+    folder.mkdir(mode=0o500)
+    monkeypatch.setenv("HANDPICKED_CONFIG", str(folder / "config.yml"))
+
+    assert main(["serve"]) == 2
+    err = capsys.readouterr().err
+    assert "cannot create one" in err
+    assert f"chown -R {os.getuid()}:{os.getgid()}" in err

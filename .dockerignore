@@ -1,0 +1,7 @@
+# Allow only what the image needs. dev/ holds real API keys.
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!src/
+**/__pycache__

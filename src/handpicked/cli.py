@@ -1,6 +1,7 @@
 import argparse
 import fcntl
 import logging
+import os
 import sqlite3
 import sys
 import time
@@ -174,6 +175,12 @@ def _create_config(path: Path) -> int:
         path.write_text(EXAMPLE_CONFIG.read_text())
     except OSError as e:
         print(f"No config at {path}, and cannot create one: {e}", file=sys.stderr)
+        if isinstance(e, PermissionError):
+            print(
+                f"Make {path.parent} writable by this user (uid {os.getuid()}),"
+                f" e.g. chown -R {os.getuid()}:{os.getgid()} on the host folder.",
+                file=sys.stderr,
+            )
         return 2
     print(f"Created {path} from the example. Edit it, then restart.", file=sys.stderr)
     return 2
