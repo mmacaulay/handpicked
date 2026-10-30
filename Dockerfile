@@ -15,8 +15,10 @@ RUN uv sync --locked --no-dev --no-editable
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     HANDPICKED_CONFIG=/config/config.yml
+# Unraid's nobody:users, so files in appdata stay editable over SMB. A new
+# named volume takes this folder's owner.
+RUN mkdir /config && chown 99:100 /config
 VOLUME /config
-# Unraid's nobody:users, so files in appdata stay editable over SMB.
 USER 99:100
 # Exec form, so handpicked is PID 1 and receives SIGTERM.
 CMD ["handpicked", "serve"]
