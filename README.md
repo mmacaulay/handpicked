@@ -18,7 +18,7 @@ See `docs/PRODUCT.md` for the why and `docs/V1.md` for the spec.
    docker exec handpicked handpicked users set <name> --include --max-age 12
    ```
 4. **Preview, if you like.** `docker exec handpicked handpicked run --dry-run` prints the picks, and emails the digest marked DRY RUN if SMTP is set up. Nothing is requested in Seerr.
-5. **That's it.** Each scheduled run creates pending requests for the included users, for you to approve or decline in Seerr. The first one also creates a Seerr user called Handpicked, which makes every request, so household members need no Seerr account. Seerr's queue shows Handpicked as the requester; the digest says who each pick is for. It can request but not approve, unless you give it auto-approve. Leave it be: deleting it just means the next run creates it again.
+5. **That's it.** Each scheduled run creates pending requests for the included users, for you to approve or decline in Seerr. The first one also creates a Seerr user called Handpicked, which makes every request, so household members need no Seerr account. Seerr's queue shows Handpicked as the requester; the digest says who each pick is for. It can request but not approve, unless you give it auto-approve. Don't delete it: Seerr deletes a user's requests along with the user, so every pending pick would go, and Handpicked would record them as deleted and never suggest those titles again.
 
 `config.yml` is optional. It can tune the scoring thresholds; `src/handpicked/config.example.yml` lists every setting. File changes apply from the next run, but the template's fields win over the file, the schedule and picks per run included. Template changes restart the container.
 
