@@ -1,6 +1,5 @@
 import fcntl
-import os
-import shutil
+import json
 import threading
 from pathlib import Path
 
@@ -8,7 +7,7 @@ import httpx
 import pytest
 import respx
 
-from handpicked import cli, db, users
+from handpicked import cli, db, suggestions, users
 from handpicked.cli import main
 from handpicked.picks import Candidate, Pick, Picks
 from handpicked.pipeline import UserPicks
@@ -42,19 +41,20 @@ def mock_services(tautulli_users=(), seerr_users=()):
         )
 
 
-def seerr_user(id, name, plex_id=None, permissions=32):
+def seerr_user(id, name, plex_id=None, permissions=32, email=None):
     return {
         "id": id,
         "plexId": plex_id,
         "displayName": name,
         "permissions": permissions,
+        "email": email,
     }
 
 
 @pytest.fixture
 def example_config(tmp_path, monkeypatch):
     config = tmp_path / "config.yml"
-    shutil.copy(EXAMPLE, config)
+    config.write_text(EXAMPLE.read_text() + "dry_run: true\n")
     monkeypatch.setenv("HANDPICKED_CONFIG", str(config))
     return config
 
@@ -124,13 +124,12 @@ def test_run_prints_picks_and_reasons(example_config, capsys, monkeypatch):
 @pytest.fixture
 def live_config(example_config):
     text = example_config.read_text()
-    text = text.replace("dry_run: true", "dry_run: false")
-    text = text.replace("# request_user_id: 5", "request_user_id: 5")
-    example_config.write_text(text)
+    example_config.write_text(text.replace("dry_run: true", "dry_run: false"))
     return example_config
 
 
-HANDPICKED = seerr_user(5, "Handpicked", permissions=32)
+HANDPICKED = seerr_user(5, "Handpicked", email=suggestions.REQUEST_USER_EMAIL)
+APPROVING = seerr_user(5, "Handpicked", permissions=2, email=HANDPICKED["email"])
 
 
 def user_picks(user_id, name, seerr, *tmdb_ids):
@@ -193,7 +192,7 @@ def test_run_requests_picks_and_syncs(live_config, capsys, monkeypatch):
 
 @respx.mock
 def test_run_needs_a_usable_request_user(live_config, capsys):
-    mock_services(seerr_users=[seerr_user(5, "Handpicked", permissions=2)])
+    mock_services(seerr_users=[APPROVING])
     post = respx.post(f"{SEERR}/request")
 
     assert main(["run"]) == 1
@@ -204,6 +203,39 @@ def test_run_needs_a_usable_request_user(live_config, capsys):
 
 
 @respx.mock
+def test_live_run_creates_the_request_user(live_config, capsys, monkeypatch):
+    mock_services(tautulli_users=[(111, "matt")])
+    matt = users.SeerrUser(id=1, plex_id=111, display_name="matt", permissions=32)
+    monkeypatch.setattr(
+        cli, "recommend", lambda *args: [user_picks(111, "matt", matt, 10)]
+    )
+    # A new user gets the server's default permissions, here auto-approve.
+    create = respx.post(f"{SEERR}/user").respond(
+        201, json={"id": 9, "displayName": "Handpicked", "permissions": 32 | 128}
+    )
+    permissions = respx.post(f"{SEERR}/user/9/settings/permissions").respond(
+        json={"permissions": 32}
+    )
+    quota = respx.post(f"{SEERR}/user/9/settings/main").respond(json={})
+    post = respx.post(f"{SEERR}/request").respond(201, json={"id": 41})
+    respx.put(f"{SEERR}/request/41").respond(json={"id": 41})
+
+    assert main(["run"]) == 0
+    assert "Created Seerr user Handpicked (id 9)" in capsys.readouterr().out
+    body = json.loads(create.calls.last.request.content)
+    assert body["email"] == suggestions.REQUEST_USER_EMAIL
+    assert len(body["password"]) >= 32
+    assert json.loads(permissions.calls.last.request.content) == {"permissions": 32}
+    assert json.loads(quota.calls.last.request.content) == {
+        "username": "Handpicked",
+        "email": suggestions.REQUEST_USER_EMAIL,
+        "movieQuotaLimit": 0,
+        "tvQuotaLimit": 0,
+    }
+    assert post.calls.last.request.headers["X-API-User"] == "9"
+
+
+@respx.mock
 def test_dry_run_warns_and_requests_nothing(example_config, capsys, monkeypatch):
     mock_services(tautulli_users=[(111, "matt")])
     matt = users.SeerrUser(id=1, plex_id=111, display_name="matt", permissions=32)
@@ -211,13 +243,12 @@ def test_dry_run_warns_and_requests_nothing(example_config, capsys, monkeypatch)
         cli, "recommend", lambda *args: [user_picks(111, "matt", matt, 10)]
     )
     post = respx.post(f"{SEERR}/request")
+    create = respx.post(f"{SEERR}/user")
 
     assert main(["run"]) == 0
     out = capsys.readouterr().out
-    assert (
-        "Warning: requests cannot be created yet:"
-        " services.seerr.request_user_id is not set"
-    ) in out
+    assert "Seerr user Handpicked not found; the first live run creates it" in out
+    assert not create.called
     assert "Requests since last run" not in out
     assert "requested in Seerr" not in out
     assert not post.called
@@ -291,7 +322,7 @@ def test_real_run_digest_shows_what_seerr_did(live_config, sent, monkeypatch):
 @respx.mock
 def test_stopped_run_still_sends_the_digest(live_config, sent):
     add_digest(live_config)
-    mock_services(seerr_users=[seerr_user(5, "Handpicked", permissions=2)])
+    mock_services(seerr_users=[APPROVING])
 
     assert main(["run"]) == 1
     (message,) = sent
@@ -453,10 +484,9 @@ def test_tautulli_error_exits_with_error(example_config, capsys):
     assert "Tautulli error" in capsys.readouterr().err
 
 
-def test_invalid_config_exits_with_error(tmp_path, monkeypatch, capsys):
-    config = tmp_path / "config.yml"
-    config.write_text("services: {}\n")
-    monkeypatch.setenv("HANDPICKED_CONFIG", str(config))
+def test_invalid_config_exits_with_error(example_config, capsys):
+    text = example_config.read_text().replace("picks_per_run: 3", "picks_per_run: 0")
+    example_config.write_text(text)
 
     assert main(["run"]) == 2
     assert "Invalid config" in capsys.readouterr().err
@@ -473,21 +503,34 @@ def test_a_run_in_progress_blocks_another(example_config, capsys):
     assert main(["run"]) == 0
 
 
-def test_serve_creates_a_missing_config_and_exits(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("command", ["run", "serve"])
+def test_missing_settings_exit_without_creating_a_config(
+    tmp_path, monkeypatch, capsys, command
+):
     path = tmp_path / "config.yml"
     monkeypatch.setenv("HANDPICKED_CONFIG", str(path))
 
-    assert main(["serve"]) == 2
-    assert path.read_text() == EXAMPLE.read_text()
-    assert "Edit it, then restart" in capsys.readouterr().err
-
-
-def test_run_does_not_create_a_missing_config(tmp_path, monkeypatch):
-    path = tmp_path / "config.yml"
-    monkeypatch.setenv("HANDPICKED_CONFIG", str(path))
-
-    assert main(["run"]) == 2
+    assert main([command]) == 2
+    assert capsys.readouterr().err.startswith("Missing settings: Tautulli URL")
     assert not path.exists()
+
+
+@respx.mock
+def test_run_from_the_environment_alone(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HANDPICKED_CONFIG", str(tmp_path / "config.yml"))
+    for var, value in {
+        "HANDPICKED_TAUTULLI_URL": "http://tautulli:8181",
+        "HANDPICKED_TAUTULLI_API_KEY": "t",
+        "HANDPICKED_SEERR_URL": "http://seerr:5055",
+        "HANDPICKED_SEERR_API_KEY": "s",
+        "HANDPICKED_TMDB_TOKEN": "m",
+    }.items():
+        monkeypatch.setenv(var, value)
+    mock_services(tautulli_users=[(111, "matt")])
+
+    assert main(["run", "--dry-run"]) == 0
+    assert "Users: 0 included, 1 not included (matt)" in capsys.readouterr().out
+    assert (tmp_path / "handpicked.db").exists()
 
 
 @respx.mock
@@ -517,14 +560,3 @@ def test_scheduled_run_logs_a_failed_run(example_config, caplog, monkeypatch):
     cli._scheduled_run()
 
     assert "Run exited with status 1" in caplog.text
-
-
-def test_serve_explains_an_unwritable_config_folder(tmp_path, monkeypatch, capsys):
-    folder = tmp_path / "appdata"
-    folder.mkdir(mode=0o500)
-    monkeypatch.setenv("HANDPICKED_CONFIG", str(folder / "config.yml"))
-
-    assert main(["serve"]) == 2
-    err = capsys.readouterr().err
-    assert "cannot create one" in err
-    assert f"chown -R {os.getuid()}:{os.getgid()}" in err

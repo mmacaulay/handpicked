@@ -6,16 +6,17 @@ See `docs/PRODUCT.md` for the why and `docs/V1.md` for the spec.
 
 ## Running on Unraid
 
-1. **Add the container.** In the Docker tab, add a container from the template at `unraid/handpicked.xml`, or save that file to `/boot/config/plugins/dockerMan/templates-user/` and pick it from the template list. The template maps `/config` to `/mnt/user/appdata/handpicked`.
-2. **Start it once.** With no config, it writes `config.yml` from the example into the appdata folder and stops. If the log says it cannot create the file, run `chown -R 99:100 /mnt/user/appdata/handpicked`: the container runs as `nobody:users`.
-3. **Edit `config.yml`.** Fill in the Tautulli, Seerr, and TMDB settings and the `digest:` block. Secrets can go in the template's masked fields instead of the file. Keep `dry_run: true` for now.
-4. **Opt users in.** Start the container, then:
+1. **Add the container.** In the Docker tab, add a container from the template at `unraid/handpicked.xml`, or save that file to `/boot/config/plugins/dockerMan/templates-user/` and pick it from the template list.
+2. **Fill in the template.** The Tautulli, Seerr, and TMDB fields are required. The SMTP fields are optional: fill them in to get the digest email. The schedule (default Sundays at 09:00, in the server's time zone) and picks per run are under "Show more settings". Then start the container. The log shows the next run time.
+3. **Opt users in.** Nobody gets picks until included:
    ```
    docker exec handpicked handpicked users
    docker exec handpicked handpicked users set <name> --include --max-age 12
    ```
-5. **Try a dry run.** `docker exec handpicked handpicked run --dry-run` prints the picks and emails a digest marked DRY RUN. Nothing is requested in Seerr.
-6. **Go live.** Create the Seerr request user and set `services.seerr.request_user_id` (the comments in `config.yml` explain it), then set `dry_run: false`. Config changes apply from the next run; only a change to `schedule` needs a restart. Runs follow `schedule` (default Sundays at 09:00, in the container's `TZ`), and the log shows the next run time.
+4. **Preview, if you like.** `docker exec handpicked handpicked run --dry-run` prints the picks, and emails the digest marked DRY RUN if SMTP is set up. Nothing is requested in Seerr.
+5. **That's it.** Each scheduled run creates pending requests for the included users, for you to approve or decline in Seerr. The first one also creates a Seerr user called Handpicked, which Handpicked makes each request as before handing it to the member. It can request but not approve. Leave it be: deleting it just means the next run creates it again.
+
+`config.yml` is optional. It can tune the scoring thresholds; `src/handpicked/config.example.yml` lists every setting. File changes apply from the next run, but the template's fields win over the file, the schedule and picks per run included. Template changes restart the container.
 
 Stopping the container lets a run in progress finish first, for up to 5 minutes. A manual run while another is in progress exits with "A run is already in progress".
 

@@ -33,6 +33,7 @@ class SeerrUser:
     plex_id: int | None  # None for local users, e.g. those made for managed accounts
     display_name: str
     permissions: int
+    email: str | None = None
 
     @property
     def auto_approve(self) -> bool:
@@ -54,9 +55,47 @@ class Seerr:
                 plex_id=user.get("plexId"),
                 display_name=user["displayName"],
                 permissions=user["permissions"],
+                email=user.get("email"),
             )
             for user in self._paged("/user")
         ]
+
+    def create_user(self, email: str, username: str, password: str) -> int:
+        """Create a local user, with the server's default permissions and quota.
+
+        Returns its id.
+        """
+        user = self._send(
+            "POST",
+            "/user",
+            expected=201,
+            json={"email": email, "username": username, "password": password},
+        )
+        return user["id"]
+
+    def set_permissions(self, user_id: int, permissions: int) -> None:
+        self._send(
+            "POST",
+            f"/user/{user_id}/settings/permissions",
+            json={"permissions": permissions},
+        )
+
+    def remove_quota(self, user_id: int, username: str, email: str) -> None:
+        """Let the user request without limit. A limit of 0 means none."""
+        # Seerr sets the username and email from this body too.
+        self._send(
+            "POST",
+            f"/user/{user_id}/settings/main",
+            json={
+                "username": username,
+                "email": email,
+                "movieQuotaLimit": 0,
+                "tvQuotaLimit": 0,
+            },
+        )
+
+    def delete_user(self, user_id: int) -> None:
+        self._send("DELETE", f"/user/{user_id}")
 
     def owned(self) -> set[Title]:
         """Titles in the library, or monitored in Radarr or Sonarr."""

@@ -1,9 +1,13 @@
 # Handpicked configuration, read from /config/config.yml (or HANDPICKED_CONFIG).
-# The container copies this example there on first start if it is missing.
+# The file is optional: the Unraid template's fields set everything most
+# installs need. Use it to tune the thresholds, or to run without the template.
 #
-# Secrets can come from the environment instead of this file; env values win:
-#   HANDPICKED_TAUTULLI_API_KEY, HANDPICKED_SEERR_API_KEY,
-#   HANDPICKED_TMDB_TOKEN, HANDPICKED_SMTP_PASSWORD
+# These environment variables (the template's fields) win over this file:
+#   HANDPICKED_TAUTULLI_URL, HANDPICKED_TAUTULLI_API_KEY,
+#   HANDPICKED_SEERR_URL, HANDPICKED_SEERR_API_KEY, HANDPICKED_TMDB_TOKEN,
+#   HANDPICKED_SCHEDULE, HANDPICKED_PICKS_PER_RUN,
+#   HANDPICKED_SMTP_HOST, HANDPICKED_SMTP_USERNAME, HANDPICKED_SMTP_PASSWORD,
+#   HANDPICKED_DIGEST_RECIPIENTS (comma-separated)
 
 services:
   tautulli:
@@ -12,24 +16,20 @@ services:
   seerr:
     url: http://seerr:5055
     api_key: your-seerr-api-key
-    # Seerr id of a local user (e.g. "Handpicked") that creates the requests
-    # before they are handed to each member, needed once dry_run is off. Give
-    # it Request, no request limit, and nothing that approves requests
-    # (Admin, Manage Requests, Auto-Approve), so they stay pending. The id is
-    # in the user's Seerr URL, /users/<id>.
-    # request_user_id: 5
   tmdb:
     token: your-tmdb-v4-read-token
 
-# Compute and report everything, write nothing to Seerr. On by default so a
-# fresh install is safe; set to false once the dry-run picks look right.
-dry_run: true
+# Compute and report everything, write nothing to Seerr. Off by default: no
+# user gets picks until opted in, and every request waits for the admin's
+# approval in Seerr. `handpicked run --dry-run` previews a single run.
+# dry_run: true
 
 # Cron expression for the run (default: Sundays at 09:00), in the container's
 # time zone (TZ). Name the day of the week (SUN, MON-FRI): numbers are
 # rejected, since the scheduler counts 0 as Monday, not Sunday. Set a day of
 # the month or a day of the week, not both. Changes to the schedule take effect
-# after a restart; other settings apply from the next run.
+# after a restart; other settings apply from the next run. On Unraid, the
+# template sets the schedule and picks per run, and its values win.
 schedule: "0 9 * * SUN"
 
 # Default picks per included user per run.
@@ -56,6 +56,6 @@ thresholds:
 #   port: 587            # defaults to 587 for starttls, 465 for ssl, 25 for none
 #   username: handpicked@example.com
 #   password: your-smtp-password
-#   sender: handpicked@example.com
+#   sender: handpicked@example.com  # defaults to username
 #   recipients:
 #     - admin@example.com

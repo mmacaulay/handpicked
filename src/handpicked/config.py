@@ -1,9 +1,9 @@
-"""Load and validate config.yml."""
+"""Load and validate the config, from the environment and config.yml."""
 
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import yaml
 from apscheduler.triggers.cron import CronTrigger
@@ -11,20 +11,44 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StringConstraints,
     ValidationError,
     field_validator,
+    model_validator,
 )
 
 DEFAULT_CONFIG_PATH = Path("/config/config.yml")
 
-# Secrets that can come from the environment (e.g. the Unraid template)
+# Settings that can come from the environment (the Unraid template's fields)
 # instead of the config file. Env values win over file values.
-SECRET_ENV_VARS = {
+ENV_VARS = {
+    "HANDPICKED_TAUTULLI_URL": ("services", "tautulli", "url"),
     "HANDPICKED_TAUTULLI_API_KEY": ("services", "tautulli", "api_key"),
+    "HANDPICKED_SEERR_URL": ("services", "seerr", "url"),
     "HANDPICKED_SEERR_API_KEY": ("services", "seerr", "api_key"),
     "HANDPICKED_TMDB_TOKEN": ("services", "tmdb", "token"),
+    "HANDPICKED_SCHEDULE": ("schedule",),
+    "HANDPICKED_PICKS_PER_RUN": ("picks_per_run",),
+    "HANDPICKED_SMTP_HOST": ("digest", "host"),
+    "HANDPICKED_SMTP_USERNAME": ("digest", "username"),
     "HANDPICKED_SMTP_PASSWORD": ("digest", "password"),
+    "HANDPICKED_DIGEST_RECIPIENTS": ("digest", "recipients"),
 }
+LIST_ENV_VARS = {"HANDPICKED_DIGEST_RECIPIENTS"}  # comma-separated
+
+# Named as in the Unraid template, for the error when one is missing. The
+# digest's are required only once any digest setting is given.
+REQUIRED = {
+    ("services", "tautulli", "url"): "Tautulli URL",
+    ("services", "tautulli", "api_key"): "Tautulli API key",
+    ("services", "seerr", "url"): "Seerr URL",
+    ("services", "seerr", "api_key"): "Seerr API key",
+    ("services", "tmdb", "token"): "TMDB read access token",
+    ("digest", "host"): "SMTP host",
+    ("digest", "recipients"): "Digest recipients",
+}
+
+NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class ConfigError(Exception):
@@ -37,23 +61,17 @@ class Model(BaseModel):
 
 
 class Service(Model):
-    url: str
-    api_key: str
-
-
-class SeerrService(Service):
-    # The local Seerr user Handpicked creates requests as. Needed only when
-    # dry_run is off.
-    request_user_id: int | None = None
+    url: NonBlank
+    api_key: NonBlank
 
 
 class Tmdb(Model):
-    token: str
+    token: NonBlank
 
 
 class Services(Model):
     tautulli: Service
-    seerr: SeerrService
+    seerr: Service
     tmdb: Tmdb
 
 
@@ -68,18 +86,26 @@ class Thresholds(Model):
 
 
 class Digest(Model):
-    host: str
+    host: NonBlank
     port: int | None = None  # 465 for ssl, 587 for starttls, 25 for none
     security: Literal["starttls", "ssl", "none"] = "starttls"
     username: str | None = None
     password: str | None = None
-    sender: str
+    sender: str | None = None  # defaults to username
     recipients: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _default_sender(self) -> Digest:
+        if self.sender is None:
+            if self.username is None:
+                raise ValueError("set a sender, or a username to send as")
+            self.sender = self.username
+        return self
 
 
 class Config(Model):
     services: Services
-    dry_run: bool = True
+    dry_run: bool = False
     schedule: str = "0 9 * * SUN"
     picks_per_run: int = Field(3, ge=1)
     thresholds: Thresholds = Field(default_factory=Thresholds)
@@ -115,8 +141,11 @@ def config_path(environ: Mapping[str, str] = os.environ) -> Path:
 
 
 def load_config(path: Path, environ: Mapping[str, str] = os.environ) -> Config:
+    """Load the config. The file is optional: the environment can set it all."""
     try:
         raw = yaml.safe_load(path.read_text()) or {}
+    except FileNotFoundError:
+        raw = {}
     except OSError as e:
         raise ConfigError(f"Cannot read config file {path}: {e}") from e
     except yaml.YAMLError as e:
@@ -130,17 +159,52 @@ def load_config(path: Path, environ: Mapping[str, str] = os.environ) -> Config:
     try:
         return Config.model_validate(raw)
     except ValidationError as e:
-        raise ConfigError(f"Invalid config in {path}:\n{e}") from e
+        raise ConfigError(_describe(e, path)) from None
 
 
 def _apply_env_overrides(raw: dict, environ: Mapping[str, str]) -> None:
-    for var, keys in SECRET_ENV_VARS.items():
-        value = environ.get(var)
+    for var, keys in ENV_VARS.items():
+        # Unraid passes a template field left blank as an empty value.
+        value: str | list[str] = environ.get(var, "").strip()
         if not value:
             continue
+        if var in LIST_ENV_VARS:
+            value = [item.strip() for item in value.split(",") if item.strip()]
         node = raw
         for key in keys[:-1]:
             if node.get(key) is None:
                 node[key] = {}
             node = node[key]
         node[keys[-1]] = value
+
+
+def _describe(error: ValidationError, path: Path) -> str:
+    """Name missing or blank settings as the template does, then any other errors."""
+    missing: set[str] = set()
+    invalid = []
+    for e in error.errors():
+        loc = tuple(e["loc"])
+        # A missing section stands for every required setting in it.
+        labels = {label for keys, label in REQUIRED.items() if keys[: len(loc)] == loc}
+        if labels and (e["type"] == "missing" or _is_blank(e["input"])):
+            missing |= labels
+        else:
+            # Without the input value, which can be a secret.
+            invalid.append(f"- {'.'.join(map(str, loc))}: {e['msg']}")
+    lines = []
+    if missing:
+        names = [label for label in REQUIRED.values() if label in missing]
+        where = path if path.exists() else f"{path} (not found)"
+        lines.append(
+            f"Missing settings: {', '.join(names)}. Fill them in on the"
+            f" container's template, or set them in {where}."
+        )
+    if invalid:
+        lines += [f"Invalid config in {path}:", *invalid]
+    return "\n".join(lines)
+
+
+def _is_blank(value: object) -> bool:
+    return (
+        value is None or value == [] or (isinstance(value, str) and not value.strip())
+    )

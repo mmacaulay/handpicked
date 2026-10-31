@@ -1,12 +1,10 @@
 import argparse
 import fcntl
-import os
 import sqlite3
 import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from importlib.resources import files
 from pathlib import Path
 
 from handpicked import db, digest, serve, suggestions, users
@@ -19,15 +17,11 @@ from handpicked.suggestions import Requested
 from handpicked.tautulli import Tautulli, TautulliError
 from handpicked.tmdb import Tmdb, TmdbCache
 
-EXAMPLE_CONFIG = files("handpicked") / "config.example.yml"
-
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
 
     path = config_path()
-    if args.command == "serve" and not path.exists():
-        return _create_config(path)
     try:
         config = load_config(path)
     except ConfigError as e:
@@ -166,22 +160,6 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _create_config(path: Path) -> int:
-    try:
-        path.write_text(EXAMPLE_CONFIG.read_text())
-    except OSError as e:
-        print(f"No config at {path}, and cannot create one: {e}", file=sys.stderr)
-        if isinstance(e, PermissionError):
-            print(
-                f"Make {path.parent} writable by this user (uid {os.getuid()}),"
-                f" e.g. chown -R {os.getuid()}:{os.getgid()} on the host folder.",
-                file=sys.stderr,
-            )
-        return 2
-    print(f"Created {path} from the example. Edit it, then restart.", file=sys.stderr)
-    return 2
-
-
 @contextmanager
 def _run_lock(directory: Path) -> Iterator[bool]:
     """Hold a lock for one run, so a manual and a scheduled run cannot overlap."""
@@ -254,8 +232,19 @@ def _run_steps(
     dry_run = report.dry_run
     now = int(time.time())
 
-    as_user = config.services.seerr.request_user_id
-    problem = suggestions.request_user_problem(seerr.users(), as_user)
+    as_user = suggestions.find_request_user(seerr.users())
+    if as_user is None and not dry_run:
+        as_user = suggestions.create_request_user(seerr)
+        print(
+            f"Created Seerr user {as_user.display_name} (id {as_user.id})"
+            " to create requests as"
+        )
+    if as_user is None:
+        print(
+            f"Seerr user {suggestions.REQUEST_USER_NAME} not found;"
+            " the first live run creates it"
+        )
+    problem = as_user and suggestions.request_user_problem(as_user)
     if problem and not dry_run:
         report.stopped = f"Cannot create requests: {problem}"
         return
@@ -291,7 +280,7 @@ def _run_steps(
         if not dry_run and result.picks:
             if result.user.seerr_user:
                 requested = suggestions.request(
-                    conn, seerr, as_user, result.user, result.picks.picks, now
+                    conn, seerr, as_user.id, result.user, result.picks.picks, now
                 )
             else:
                 reason = result.user.problem or "no Seerr user"

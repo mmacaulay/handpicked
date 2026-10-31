@@ -1,6 +1,7 @@
 """Request picks in Seerr and track each suggestion's lifecycle."""
 
 import json
+import secrets
 import sqlite3
 from collections import Counter
 from dataclasses import dataclass
@@ -8,6 +9,11 @@ from dataclasses import dataclass
 from handpicked.picks import Candidate, Pick
 from handpicked.seerr import REQUEST, REQUEST_MOVIE_AND_TV, Seerr, SeerrError, SeerrUser
 from handpicked.users import User
+
+# Handpicked's own Seerr user, which creates each request before it is handed
+# to the member. Found by this email, and created on the first live run.
+REQUEST_USER_EMAIL = "handpicked@handpicked.invalid"
+REQUEST_USER_NAME = "Handpicked"
 
 # Seerr MediaRequestStatus values the admin's review leads to. Failed is an
 # approved request that Radarr or Sonarr could not take.
@@ -21,15 +27,39 @@ class Requested:
     error: str | None  # why Seerr refused it
 
 
-def request_user_problem(
-    seerr_users: list[SeerrUser], user_id: int | None
-) -> str | None:
-    """Why the configured user cannot create pending requests, if it cannot."""
-    if user_id is None:
-        return "services.seerr.request_user_id is not set"
-    user = next((u for u in seerr_users if u.id == user_id), None)
-    if user is None:
-        return f"Seerr user {user_id} (services.seerr.request_user_id) does not exist"
+def find_request_user(seerr_users: list[SeerrUser]) -> SeerrUser | None:
+    return next(
+        (u for u in seerr_users if (u.email or "").lower() == REQUEST_USER_EMAIL),
+        None,
+    )
+
+
+def create_request_user(seerr: Seerr) -> SeerrUser:
+    """Create Handpicked's Seerr user, able to request but not to approve."""
+    # Nobody logs in as it. Seerr needs a password, or email to send one.
+    user_id = seerr.create_user(
+        REQUEST_USER_EMAIL, REQUEST_USER_NAME, secrets.token_urlsafe(32)
+    )
+    try:
+        # A new user gets the server's default permissions, which may approve
+        # requests, and its default quota, which would refuse picks.
+        seerr.set_permissions(user_id, REQUEST)
+        seerr.remove_quota(user_id, REQUEST_USER_NAME, REQUEST_USER_EMAIL)
+    except SeerrError as e:
+        # Otherwise the next run finds it half set up, and stops.
+        try:
+            seerr.delete_user(user_id)
+        except SeerrError as cleanup:
+            raise SeerrError(
+                f"{e}; Seerr user {user_id} is left half set up: {cleanup}",
+                e.status_code,
+            ) from e
+        raise
+    return SeerrUser(user_id, None, REQUEST_USER_NAME, REQUEST, REQUEST_USER_EMAIL)
+
+
+def request_user_problem(user: SeerrUser) -> str | None:
+    """Why Handpicked's Seerr user cannot create pending requests, if it cannot."""
     if user.auto_approve:
         return (
             f"Seerr user {user.display_name} must not have Admin, Manage Requests,"
