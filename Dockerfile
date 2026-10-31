@@ -12,13 +12,11 @@ RUN uv sync --locked --no-dev --no-install-project
 COPY src ./src
 RUN uv sync --locked --no-dev --no-editable
 
-ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONUNBUFFERED=1 \
+ENV PYTHONUNBUFFERED=1 \
     HANDPICKED_CONFIG=/config/config.yml
-# Unraid's nobody:users, so files in appdata stay editable over SMB. A new
-# named volume takes this folder's owner.
-RUN mkdir /config && chown 99:100 /config
+# Starts as root to fix /config's owner, then runs as PUID:PGID. The venv is
+# not on PATH, so `docker exec ... handpicked` goes through this too.
+COPY --chmod=755 docker/handpicked.sh /usr/local/bin/handpicked
 VOLUME /config
-USER 99:100
-# Exec form, so handpicked is PID 1 and receives SIGTERM.
+# Exec form, and the wrapper execs, so handpicked is PID 1 and receives SIGTERM.
 CMD ["handpicked", "serve"]
