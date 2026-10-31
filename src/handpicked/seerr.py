@@ -156,7 +156,7 @@ class Seerr:
 
     def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         # No X-API-User header: reads must run as the admin, or Seerr limits
-        # them to that user's own requests and hides plexId.
+        # them to that user's own requests.
         return self._send("GET", path, params=params)
 
     def _send(

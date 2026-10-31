@@ -41,8 +41,8 @@ def mock_services(tautulli_users=(), seerr_users=()):
         )
 
 
-def seerr_user(id, name, permissions=32, email=None):
-    return {"id": id, "displayName": name, "permissions": permissions, "email": email}
+def seerr_user(id, name, email=None):
+    return {"id": id, "displayName": name, "email": email}
 
 
 @pytest.fixture
@@ -119,7 +119,6 @@ def live_config(example_config):
 
 
 HANDPICKED = seerr_user(5, "Handpicked", email=suggestions.REQUEST_USER_EMAIL)
-APPROVING = seerr_user(5, "Handpicked", permissions=2, email=HANDPICKED["email"])
 
 
 def user_picks(user_id, name, *tmdb_ids):
@@ -181,8 +180,10 @@ def test_run_requests_picks_and_syncs(live_config, capsys, monkeypatch):
 
 
 @respx.mock
-def test_an_approving_request_user_still_requests(live_config, capsys, monkeypatch):
-    mock_services(tautulli_users=[(111, "matt")], seerr_users=[APPROVING])
+def test_a_request_seerr_approves_is_recorded_by_the_next_sync(
+    live_config, capsys, monkeypatch
+):
+    mock_services(tautulli_users=[(111, "matt")], seerr_users=[HANDPICKED])
     monkeypatch.setattr(cli, "recommend", lambda *args: [user_picks(111, "matt", 10)])
     respx.post(f"{SEERR}/request").respond(201, json={"id": 41, "status": 2})
 
