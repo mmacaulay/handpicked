@@ -11,7 +11,13 @@ from handpicked.picks import Candidate, Pick
 from handpicked.pipeline import recommend
 from handpicked.seeds import Seed
 from handpicked.seerr import Seerr, SeerrError, SeerrUser
-from handpicked.suggestions import request, request_user_problem, sync
+from handpicked.suggestions import (
+    REQUEST_USER_EMAIL,
+    find_request_user,
+    request,
+    request_user_problem,
+    sync,
+)
 from handpicked.users import User
 
 URL = "http://seerr:5055/api/v1"
@@ -67,20 +73,19 @@ def rows(conn):
     ],
 )
 def test_request_user_permissions(permissions, problem):
-    users = [
-        SeerrUser(
-            id=5, plex_id=None, display_name="Handpicked", permissions=permissions
-        )
-    ]
+    user = SeerrUser(5, None, "Handpicked", permissions, email=REQUEST_USER_EMAIL)
 
-    found = request_user_problem(users, 5)
+    found = request_user_problem(user)
 
     assert found is None if problem is None else problem in found
 
 
-def test_request_user_must_be_set_and_exist():
-    assert "is not set" in request_user_problem([], None)
-    assert "does not exist" in request_user_problem([], 5)
+def test_request_user_is_found_by_email():
+    handpicked = SeerrUser(5, None, "Bot", 32, email=REQUEST_USER_EMAIL.upper())
+    named = SeerrUser(6, None, "Handpicked", 32, email="admin@example.com")
+
+    assert find_request_user([MEMBER, named, handpicked]) is handpicked
+    assert find_request_user([MEMBER, named]) is None
 
 
 @respx.mock

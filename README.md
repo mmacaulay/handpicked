@@ -14,15 +14,9 @@ See `docs/PRODUCT.md` for the why and `docs/V1.md` for the spec.
    docker exec handpicked handpicked users set <name> --include --max-age 12
    ```
 4. **Preview, if you like.** `docker exec handpicked handpicked run --dry-run` prints the picks, and emails the digest marked DRY RUN if SMTP is set up. Nothing is requested in Seerr.
-5. **Set the Seerr request user.** Create a local Seerr user (e.g. "Handpicked") with Request, no request limit, and nothing that approves requests. Put its id, from its Seerr URL (`/users/<id>`), in `config.yml` in the appdata folder:
-   ```yaml
-   services:
-     seerr:
-       request_user_id: 5
-   ```
-   Each scheduled run then creates pending requests for the included users, for you to approve or decline in Seerr.
+5. **That's it.** Each scheduled run creates pending requests for the included users, for you to approve or decline in Seerr. The first one also creates a Seerr user called Handpicked, which Handpicked makes each request as before handing it to the member. It can request but not approve. Leave it be: deleting it just means the next run creates it again.
 
-`config.yml` is otherwise optional. It can tune the scoring thresholds; `src/handpicked/config.example.yml` lists every setting. File changes apply from the next run, but the template's fields win over the file, the schedule and picks per run included. Template changes restart the container.
+`config.yml` is optional. It can tune the scoring thresholds; `src/handpicked/config.example.yml` lists every setting. File changes apply from the next run, but the template's fields win over the file, the schedule and picks per run included. Template changes restart the container.
 
 Stopping the container lets a run in progress finish first, for up to 5 minutes. A manual run while another is in progress exits with "A run is already in progress".
 

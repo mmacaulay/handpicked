@@ -33,6 +33,7 @@ class SeerrUser:
     plex_id: int | None  # None for local users, e.g. those made for managed accounts
     display_name: str
     permissions: int
+    email: str | None = None
 
     @property
     def auto_approve(self) -> bool:
@@ -54,9 +55,34 @@ class Seerr:
                 plex_id=user.get("plexId"),
                 display_name=user["displayName"],
                 permissions=user["permissions"],
+                email=user.get("email"),
             )
             for user in self._paged("/user")
         ]
+
+    def create_user(self, email: str, username: str, password: str) -> SeerrUser:
+        """Create a local user, with the server's default permissions."""
+        user = self._send(
+            "POST",
+            "/user",
+            expected=201,
+            json={"email": email, "username": username, "password": password},
+        )
+        # The response leaves out the email, and may the display name.
+        return SeerrUser(
+            id=user["id"],
+            plex_id=None,
+            display_name=user.get("displayName") or username,
+            permissions=user["permissions"],
+            email=email,
+        )
+
+    def set_permissions(self, user_id: int, permissions: int) -> None:
+        self._send(
+            "POST",
+            f"/user/{user_id}/settings/permissions",
+            json={"permissions": permissions},
+        )
 
     def owned(self) -> set[Title]:
         """Titles in the library, or monitored in Radarr or Sonarr."""

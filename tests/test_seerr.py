@@ -62,15 +62,41 @@ def test_users(seerr):
         json=page(
             [
                 {"id": 1, "plexId": 111, "displayName": "matt", "permissions": 2},
-                {"id": 7, "plexId": None, "displayName": "Kid", "permissions": 32},
+                {
+                    "id": 7,
+                    "plexId": None,
+                    "displayName": "Kid",
+                    "permissions": 32,
+                    "email": "kid@example.com",
+                },
             ]
         )
     )
 
     assert seerr.users() == [
         SeerrUser(id=1, plex_id=111, display_name="matt", permissions=2),
-        SeerrUser(id=7, plex_id=None, display_name="Kid", permissions=32),
+        SeerrUser(7, None, "Kid", 32, email="kid@example.com"),
     ]
+
+
+@respx.mock
+def test_create_user_and_set_its_permissions(seerr):
+    # Seerr leaves the email out of the new user it returns.
+    create = respx.post(f"{URL}/user").respond(201, json={"id": 9, "permissions": 2})
+    permissions = respx.post(f"{URL}/user/9/settings/permissions").respond(
+        json={"permissions": 32}
+    )
+
+    user = seerr.create_user("bot@example.com", "Bot", "secret")
+    seerr.set_permissions(9, 32)
+
+    assert user == SeerrUser(9, None, "Bot", 2, email="bot@example.com")
+    assert json.loads(create.calls.last.request.content) == {
+        "email": "bot@example.com",
+        "username": "Bot",
+        "password": "secret",
+    }
+    assert json.loads(permissions.calls.last.request.content) == {"permissions": 32}
 
 
 @pytest.mark.parametrize(

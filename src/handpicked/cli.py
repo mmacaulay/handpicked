@@ -232,8 +232,19 @@ def _run_steps(
     dry_run = report.dry_run
     now = int(time.time())
 
-    as_user = config.services.seerr.request_user_id
-    problem = suggestions.request_user_problem(seerr.users(), as_user)
+    as_user = suggestions.find_request_user(seerr.users())
+    if as_user is None and not dry_run:
+        as_user = suggestions.create_request_user(seerr)
+        print(
+            f"Created Seerr user {as_user.display_name} (id {as_user.id})"
+            " to create requests as"
+        )
+    if as_user is None:
+        print(
+            f"Seerr user {suggestions.REQUEST_USER_NAME} not found;"
+            " the first live run creates it"
+        )
+    problem = as_user and suggestions.request_user_problem(as_user)
     if problem and not dry_run:
         report.stopped = f"Cannot create requests: {problem}"
         return
@@ -269,7 +280,7 @@ def _run_steps(
         if not dry_run and result.picks:
             if result.user.seerr_user:
                 requested = suggestions.request(
-                    conn, seerr, as_user, result.user, result.picks.picks, now
+                    conn, seerr, as_user.id, result.user, result.picks.picks, now
                 )
             else:
                 reason = result.user.problem or "no Seerr user"
