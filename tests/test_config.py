@@ -147,6 +147,15 @@ def test_missing_settings_are_named_as_in_the_template(tmp_path):
     assert "(not found)" in str(raised.value)
 
 
+def test_a_misspelled_key_is_named_not_reported_missing(tmp_path):
+    text = MINIMAL.replace("{token: m}", "{tokn: m}")
+
+    with pytest.raises(ConfigError, match="tokn") as raised:
+        load_config(write(tmp_path, text), environ={})
+
+    assert "Missing settings" not in str(raised.value)
+
+
 def test_a_partial_digest_names_what_it_still_needs(tmp_path):
     environ = ENVIRON | {"HANDPICKED_SMTP_PASSWORD": "p"}
 

@@ -154,11 +154,13 @@ def load_config(path: Path, environ: Mapping[str, str] = os.environ) -> Config:
         raise ConfigError(f"{path} must contain a mapping at the top level")
 
     _apply_env_overrides(raw, environ)
-    _check_required(raw, path)
 
     try:
         return Config.model_validate(raw)
     except ValidationError as e:
+        # Only when nothing else is wrong, so a misspelled key is still named.
+        if all(error["type"] == "missing" for error in e.errors()):
+            _check_required(raw, path)
         raise ConfigError(f"Invalid config in {path}:\n{e}") from e
 
 
@@ -179,7 +181,7 @@ def _apply_env_overrides(raw: dict, environ: Mapping[str, str]) -> None:
 
 
 def _check_required(raw: dict, path: Path) -> None:
-    """Name missing settings as the template does, before pydantic would."""
+    """Name missing settings as the template does, if any are."""
     required = dict(REQUIRED)
     if isinstance(raw.get("digest"), dict):
         required |= REQUIRED_FOR_DIGEST
