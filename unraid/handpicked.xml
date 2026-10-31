@@ -13,7 +13,7 @@
     <Category>MediaApp:Other Tools:</Category>
     <WebUI/>
     <TemplateURL>https://raw.githubusercontent.com/mmacaulay/handpicked/main/unraid/handpicked.xml</TemplateURL>
-    <Icon/>
+    <Icon>https://raw.githubusercontent.com/mmacaulay/handpicked/main/unraid/icon.png</Icon>
     <!-- Room for a run in progress to finish on stop, so a Seerr request is never left unrecorded. -->
     <ExtraParams>--stop-timeout=300</ExtraParams>
     <PostArgs/>
