@@ -22,7 +22,7 @@ See `docs/PRODUCT.md` for the why and `docs/V1.md` for the spec.
    ```
    Each scheduled run then creates pending requests for the included users, for you to approve or decline in Seerr.
 
-`config.yml` is otherwise optional. It can tune the scoring thresholds; `src/handpicked/config.example.yml` lists every setting. File changes apply from the next run. Template changes restart the container.
+`config.yml` is otherwise optional. It can tune the scoring thresholds; `src/handpicked/config.example.yml` lists every setting. File changes apply from the next run, but the template's fields win over the file, the schedule and picks per run included. Template changes restart the container.
 
 Stopping the container lets a run in progress finish first, for up to 5 minutes. A manual run while another is in progress exits with "A run is already in progress".
 
