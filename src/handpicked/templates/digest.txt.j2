@@ -5,12 +5,6 @@ DRY RUN: nothing was requested in Seerr or recorded.
 The run stopped early:
 {{ r.stopped }}
 {% endif %}
-{% if r.request_problem %}
-Warning: requests cannot be created yet: {{ r.request_problem }}
-{% endif %}
-{% for user in r.included if user.problem %}
-Warning: {{ user.username }}: {{ user.problem }}
-{% endfor %}
 {% if r.changes is not none %}
 Since the last run: {{ r.changes["approved"] }} approved, {{ r.changes["declined"] }} declined, {{ r.changes["deleted"] }} deleted
 {% endif %}

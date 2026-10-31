@@ -124,3 +124,37 @@ def test_deleted_status_keeps_existing_suggestions(conn, migrations):
     assert after == {**before, "deleted_at": None}
     with conn:
         conn.execute("UPDATE suggestions SET status = 'deleted', deleted_at = 4")
+
+
+def test_dropping_the_seerr_link_keeps_users_and_suggestions(conn, migrations):
+    for entry in db.MIGRATIONS.iterdir():
+        if entry.name[:4] < "0006" and entry.name.endswith(".sql"):
+            (migrations / entry.name).write_text(entry.read_text())
+    db.migrate(conn, migrations)
+    with conn:
+        conn.execute(
+            """
+            INSERT INTO users (
+                user_id, username, seerr_user_id, seerr_link, include, max_age
+            ) VALUES (7, 'user7', 3, 'manual', 1, 10)
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO suggestions (
+                user_id, media_type, tmdb_id, score, seeds, status,
+                seerr_request_id, proposed_at, requested_at
+            ) VALUES (7, 'movie', 10, 1.5, '[]', 'requested', 41, 1, 2)
+            """
+        )
+
+    db.migrate(conn)
+
+    assert dict(conn.execute("SELECT * FROM users").fetchone()) == {
+        "user_id": 7,
+        "username": "user7",
+        "include": 1,
+        "max_age": 10,
+        "picks_per_run": None,
+    }
+    assert conn.execute("SELECT seerr_request_id FROM suggestions").fetchone()[0] == 41

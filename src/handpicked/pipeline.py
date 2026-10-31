@@ -30,8 +30,8 @@ def recommend(
 ) -> list[UserPicks]:
     """Picks for each included user. Writes nothing but the TMDB cache.
 
-    A title goes to the first user with a Seerr link it is picked for, since
-    Seerr takes one request per title.
+    A title goes to the first user it is picked for, since Seerr takes one
+    request per title.
     """
     if not included:
         return []
@@ -66,10 +66,9 @@ def recommend(
             except TmdbError as e:
                 results.append(UserPicks(user, history, None, f"TMDB error: {e}"))
                 continue
-            if user.seerr_user:  # without one, the picks cannot be requested
-                owned_or_requested |= {
-                    (p.candidate.media_type, p.candidate.tmdb_id) for p in picks.picks
-                }
+            owned_or_requested |= {
+                (p.candidate.media_type, p.candidate.tmdb_id) for p in picks.picks
+            }
             results.append(UserPicks(user, history, picks, None))
     finally:
         # Keep the TMDB responses fetched so far, on dry runs and on errors.

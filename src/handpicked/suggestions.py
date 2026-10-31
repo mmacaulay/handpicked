@@ -7,11 +7,11 @@ from collections import Counter
 from dataclasses import dataclass
 
 from handpicked.picks import Candidate, Pick
-from handpicked.seerr import REQUEST, REQUEST_MOVIE_AND_TV, Seerr, SeerrError, SeerrUser
+from handpicked.seerr import REQUEST, Seerr, SeerrError, SeerrUser
 from handpicked.users import User
 
-# Handpicked's own Seerr user, which creates each request before it is handed
-# to the member. Found by this email, and created on the first live run.
+# Handpicked's own Seerr user, which creates every request. Found by this
+# email, and created on the first live run.
 REQUEST_USER_EMAIL = "handpicked@handpicked.invalid"
 REQUEST_USER_NAME = "Handpicked"
 
@@ -42,11 +42,12 @@ def create_request_user(seerr: Seerr) -> SeerrUser:
     )
     try:
         # A new user gets the server's default permissions, which may approve
-        # requests, and its default quota, which would refuse picks.
+        # requests, and its default quota, which would refuse picks. Approval
+        # is left to the admin, who can still give it auto-approve.
         seerr.set_permissions(user_id, REQUEST)
         seerr.remove_quota(user_id, REQUEST_USER_NAME, REQUEST_USER_EMAIL)
     except SeerrError as e:
-        # Otherwise the next run finds it half set up, and stops.
+        # Otherwise the next run finds it and requests as it, half set up.
         try:
             seerr.delete_user(user_id)
         except SeerrError as cleanup:
@@ -55,20 +56,7 @@ def create_request_user(seerr: Seerr) -> SeerrUser:
                 e.status_code,
             ) from e
         raise
-    return SeerrUser(user_id, None, REQUEST_USER_NAME, REQUEST, REQUEST_USER_EMAIL)
-
-
-def request_user_problem(user: SeerrUser) -> str | None:
-    """Why Handpicked's Seerr user cannot create pending requests, if it cannot."""
-    if user.auto_approve:
-        return (
-            f"Seerr user {user.display_name} must not have Admin, Manage Requests,"
-            " or Auto-Approve permissions, or its requests skip approval"
-        )
-    both = user.permissions & REQUEST_MOVIE_AND_TV == REQUEST_MOVIE_AND_TV
-    if not (user.permissions & REQUEST or both):
-        return f"Seerr user {user.display_name} needs the Request permission"
-    return None
+    return SeerrUser(user_id, REQUEST_USER_NAME, REQUEST_USER_EMAIL)
 
 
 def request(
@@ -79,17 +67,16 @@ def request(
     picks: list[Pick],
     now: int,
 ) -> list[Requested]:
-    """Create a pending request for each of the user's picks, and record it.
+    """Request each of the user's picks as `as_user`, and record it.
 
     A refused pick gets no row, so the title can be picked again next run.
     """
-    assert user.seerr_user is not None
     results = []
     for pick in picks:
         candidate = pick.candidate
         try:
             request_id = seerr.create_request(
-                as_user, user.seerr_user.id, candidate.media_type, candidate.tmdb_id
+                as_user, candidate.media_type, candidate.tmdb_id
             )
         except SeerrError as e:
             results.append(Requested(pick, None, str(e)))

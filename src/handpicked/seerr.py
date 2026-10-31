@@ -9,14 +9,8 @@ import httpx
 # Seerr MediaStatus values: processing, partially available, available.
 OWNED_STATUSES = {3, 4, 5}
 
-# Seerr Permission bits that make requests skip the approval queue when the
-# user is the API caller: ADMIN, MANAGE_REQUESTS, AUTO_APPROVE,
-# AUTO_APPROVE_MOVIE, AUTO_APPROVE_TV.
-AUTO_APPROVE = 2 | 16 | 128 | 256 | 512
-# Permission bits that let a user request movies and series: REQUEST, or
-# both REQUEST_MOVIE and REQUEST_TV.
+# The Seerr Permission bit that lets a user request movies and series.
 REQUEST = 32
-REQUEST_MOVIE_AND_TV = 262144 | 524288
 
 Title = tuple[str, int]  # (media_type, tmdb_id); movie and TV ids overlap
 
@@ -30,14 +24,8 @@ class SeerrError(Exception):
 @dataclass(frozen=True)
 class SeerrUser:
     id: int
-    plex_id: int | None  # None for local users, e.g. those made for managed accounts
     display_name: str
-    permissions: int
     email: str | None = None
-
-    @property
-    def auto_approve(self) -> bool:
-        return bool(self.permissions & AUTO_APPROVE)
 
 
 class Seerr:
@@ -52,9 +40,7 @@ class Seerr:
         return [
             SeerrUser(
                 id=user["id"],
-                plex_id=user.get("plexId"),
                 display_name=user["displayName"],
-                permissions=user["permissions"],
                 email=user.get("email"),
             )
             for user in self._paged("/user")
@@ -124,16 +110,10 @@ class Seerr:
             (item["mediaType"], item["tmdbId"]) for item in self._paged("/blocklist")
         }
 
-    def create_request(
-        self, as_user: int, user_id: int, media_type: str, tmdb_id: int
-    ) -> int:
-        """Create a pending request for `user_id`. Returns its id.
+    def create_request(self, as_user: int, media_type: str, tmdb_id: int) -> int:
+        """Create a request as `as_user`, so its permissions decide approval.
 
-        Setting a new request's user takes Manage Users and Manage Requests,
-        and Manage Requests approves it. So `as_user`, which must not
-        auto-approve, creates the request, and the admin key then reassigns
-        it. Seerr keeps an edited request pending, and checks the new user's
-        quota.
+        Returns its id.
         """
         body: dict[str, Any] = {"mediaType": media_type, "mediaId": tmdb_id}
         if media_type == "tv":
@@ -147,22 +127,6 @@ class Seerr:
             json=body,
             headers={"X-API-User": str(as_user)},
         )
-        path = f"/request/{request['id']}"
-        change: dict[str, Any] = {"mediaType": media_type, "userId": user_id}
-        if media_type == "tv":
-            change["seasons"] = [s["seasonNumber"] for s in request["seasons"]]
-        try:
-            self._send("PUT", path, json=change)
-        except SeerrError as e:
-            # Leave nothing in the queue that reads as requested by `as_user`.
-            try:
-                self._send("DELETE", path, expected=204)
-            except SeerrError as cleanup:
-                raise SeerrError(
-                    f"{e}; {path} is still in Seerr as user {as_user}'s: {cleanup}",
-                    e.status_code,
-                ) from e
-            raise
         return request["id"]
 
     def request_status(self, request_id: int) -> int | None:
