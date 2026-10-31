@@ -1,12 +1,10 @@
 import argparse
 import fcntl
-import os
 import sqlite3
 import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from importlib.resources import files
 from pathlib import Path
 
 from handpicked import db, digest, serve, suggestions, users
@@ -19,15 +17,11 @@ from handpicked.suggestions import Requested
 from handpicked.tautulli import Tautulli, TautulliError
 from handpicked.tmdb import Tmdb, TmdbCache
 
-EXAMPLE_CONFIG = files("handpicked") / "config.example.yml"
-
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
 
     path = config_path()
-    if args.command == "serve" and not path.exists():
-        return _create_config(path)
     try:
         config = load_config(path)
     except ConfigError as e:
@@ -164,22 +158,6 @@ def _parser() -> argparse.ArgumentParser:
     link.add_argument("username")
     link.add_argument("seerr_user_id", type=int)
     return parser
-
-
-def _create_config(path: Path) -> int:
-    try:
-        path.write_text(EXAMPLE_CONFIG.read_text())
-    except OSError as e:
-        print(f"No config at {path}, and cannot create one: {e}", file=sys.stderr)
-        if isinstance(e, PermissionError):
-            print(
-                f"Make {path.parent} writable by this user (uid {os.getuid()}),"
-                f" e.g. chown -R {os.getuid()}:{os.getgid()} on the host folder.",
-                file=sys.stderr,
-            )
-        return 2
-    print(f"Created {path} from the example. Edit it, then restart.", file=sys.stderr)
-    return 2
 
 
 @contextmanager

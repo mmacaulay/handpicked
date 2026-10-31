@@ -1,6 +1,4 @@
 import fcntl
-import os
-import shutil
 import threading
 from pathlib import Path
 
@@ -54,7 +52,7 @@ def seerr_user(id, name, plex_id=None, permissions=32):
 @pytest.fixture
 def example_config(tmp_path, monkeypatch):
     config = tmp_path / "config.yml"
-    shutil.copy(EXAMPLE, config)
+    config.write_text(EXAMPLE.read_text() + "dry_run: true\n")
     monkeypatch.setenv("HANDPICKED_CONFIG", str(config))
     return config
 
@@ -453,10 +451,9 @@ def test_tautulli_error_exits_with_error(example_config, capsys):
     assert "Tautulli error" in capsys.readouterr().err
 
 
-def test_invalid_config_exits_with_error(tmp_path, monkeypatch, capsys):
-    config = tmp_path / "config.yml"
-    config.write_text("services: {}\n")
-    monkeypatch.setenv("HANDPICKED_CONFIG", str(config))
+def test_invalid_config_exits_with_error(example_config, capsys):
+    text = example_config.read_text().replace("picks_per_run: 3", "picks_per_run: 0")
+    example_config.write_text(text)
 
     assert main(["run"]) == 2
     assert "Invalid config" in capsys.readouterr().err
@@ -473,21 +470,34 @@ def test_a_run_in_progress_blocks_another(example_config, capsys):
     assert main(["run"]) == 0
 
 
-def test_serve_creates_a_missing_config_and_exits(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("command", ["run", "serve"])
+def test_missing_settings_exit_without_creating_a_config(
+    tmp_path, monkeypatch, capsys, command
+):
     path = tmp_path / "config.yml"
     monkeypatch.setenv("HANDPICKED_CONFIG", str(path))
 
-    assert main(["serve"]) == 2
-    assert path.read_text() == EXAMPLE.read_text()
-    assert "Edit it, then restart" in capsys.readouterr().err
-
-
-def test_run_does_not_create_a_missing_config(tmp_path, monkeypatch):
-    path = tmp_path / "config.yml"
-    monkeypatch.setenv("HANDPICKED_CONFIG", str(path))
-
-    assert main(["run"]) == 2
+    assert main([command]) == 2
+    assert capsys.readouterr().err.startswith("Missing settings: Tautulli URL")
     assert not path.exists()
+
+
+@respx.mock
+def test_run_from_the_environment_alone(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HANDPICKED_CONFIG", str(tmp_path / "config.yml"))
+    for var, value in {
+        "HANDPICKED_TAUTULLI_URL": "http://tautulli:8181",
+        "HANDPICKED_TAUTULLI_API_KEY": "t",
+        "HANDPICKED_SEERR_URL": "http://seerr:5055",
+        "HANDPICKED_SEERR_API_KEY": "s",
+        "HANDPICKED_TMDB_TOKEN": "m",
+    }.items():
+        monkeypatch.setenv(var, value)
+    mock_services(tautulli_users=[(111, "matt")])
+
+    assert main(["run", "--dry-run"]) == 0
+    assert "Users: 0 included, 1 not included (matt)" in capsys.readouterr().out
+    assert (tmp_path / "handpicked.db").exists()
 
 
 @respx.mock
@@ -517,14 +527,3 @@ def test_scheduled_run_logs_a_failed_run(example_config, caplog, monkeypatch):
     cli._scheduled_run()
 
     assert "Run exited with status 1" in caplog.text
-
-
-def test_serve_explains_an_unwritable_config_folder(tmp_path, monkeypatch, capsys):
-    folder = tmp_path / "appdata"
-    folder.mkdir(mode=0o500)
-    monkeypatch.setenv("HANDPICKED_CONFIG", str(folder / "config.yml"))
-
-    assert main(["serve"]) == 2
-    err = capsys.readouterr().err
-    assert "cannot create one" in err
-    assert f"chown -R {os.getuid()}:{os.getgid()}" in err
