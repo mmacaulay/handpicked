@@ -226,7 +226,12 @@ def test_live_run_creates_the_request_user(live_config, capsys, monkeypatch):
     assert body["email"] == suggestions.REQUEST_USER_EMAIL
     assert len(body["password"]) >= 32
     assert json.loads(permissions.calls.last.request.content) == {"permissions": 32}
-    assert quota.called
+    assert json.loads(quota.calls.last.request.content) == {
+        "username": "Handpicked",
+        "email": suggestions.REQUEST_USER_EMAIL,
+        "movieQuotaLimit": 0,
+        "tvQuotaLimit": 0,
+    }
     assert post.calls.last.request.headers["X-API-User"] == "9"
 
 
