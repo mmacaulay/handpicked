@@ -10,9 +10,8 @@ HANDPICKED=/app/.venv/bin/handpicked
 if [ "$(id -u)" != 0 ]; then
     exec "$HANDPICKED" "$@"
 fi
-# Docker creates a missing appdata folder, or a new volume, owned by root.
-dir="$(dirname "$HANDPICKED_CONFIG")"
-if [ "$(stat -c %u:%g "$dir")" != "$PUID:$PGID" ]; then
-    chown -R "$PUID:$PGID" "$dir"
-fi
+# Docker creates a missing appdata folder, or a new volume, owned by root,
+# and a restored backup may be too.
+find "$(dirname "$HANDPICKED_CONFIG")" \( ! -user "$PUID" -o ! -group "$PGID" \) \
+    -exec chown -h "$PUID:$PGID" {} +
 exec setpriv --reuid="$PUID" --regid="$PGID" --clear-groups -- "$HANDPICKED" "$@"
