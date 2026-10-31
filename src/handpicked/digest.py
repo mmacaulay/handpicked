@@ -36,7 +36,6 @@ class Entry:
 class Report:
     dry_run: bool
     stopped: str | None = None  # why the run stopped early
-    request_problem: str | None = None
     changes: Counter[str] | None = None  # None on dry runs
     ingest: IngestStats | None = None
     included: list[User] = field(default_factory=list)

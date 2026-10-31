@@ -24,8 +24,8 @@ SETTINGS = Digest(
 SEEDS = [Seed("movie", 1, "Seed One", 0.9), Seed("tv", 2, "Seed Two", 0.6)]
 
 
-def user(user_id, name, problem=None):
-    return User(user_id, name, True, None, None, None, None, problem)
+def user(user_id, name):
+    return User(user_id, name, True, None, None)
 
 
 def pick(tmdb_id, name, media_type="movie", certification="PG", poster=None):
@@ -55,7 +55,7 @@ def report(**kwargs):
         dry_run=False,
         changes=Counter(approved=2, deleted=1),
         ingest=IngestStats(new_events=5, resolved=2, unresolved=1),
-        included=[user(1, "kid"), user(2, "adult", problem="no matching Seerr user")],
+        included=[user(1, "kid"), user(2, "adult")],
         excluded=[user(3, "guest")],
         entries=[
             entry(
@@ -109,7 +109,6 @@ def test_text_shows_each_pick_with_its_seeds_and_outcome():
 
     assert "DRY RUN" not in text
     assert "Since the last run: 2 approved, 0 declined, 1 deleted" in text
-    assert "Warning: adult: no matching Seerr user" in text
     assert "kid (2 seeds, 1 abandoned, 2 recent titles skipped (no TMDB id))" in text
     assert "  1. Tom & Jerry <Uncut> (2020, movie, PG, TMDB 7.8)" in text
     assert "     because you finished Seed One and Seed Two" in text
@@ -146,7 +145,7 @@ def test_html_shows_posters_and_tmdb_attribution():
 def test_dry_run_is_marked_everywhere():
     entries = [entry("kid", [pick(10, "Pick")])]
     message = render(
-        report(dry_run=True, changes=None, entries=entries, request_problem="unset"),
+        report(dry_run=True, changes=None, entries=entries),
         SETTINGS,
     )
     text, html = parts(message)
@@ -154,7 +153,6 @@ def test_dry_run_is_marked_everywhere():
     assert message["Subject"] == "[DRY RUN] Handpicked: 1 pick for 1 person"
     assert text.startswith("DRY RUN: nothing was requested in Seerr or recorded.")
     assert "DRY RUN: nothing was requested" in html
-    assert "Warning: requests cannot be created yet: unset" in text
     assert "Since the last run" not in text
     assert "Requested in Seerr" not in text
 

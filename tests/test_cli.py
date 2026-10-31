@@ -41,14 +41,8 @@ def mock_services(tautulli_users=(), seerr_users=()):
         )
 
 
-def seerr_user(id, name, plex_id=None, permissions=32, email=None):
-    return {
-        "id": id,
-        "plexId": plex_id,
-        "displayName": name,
-        "permissions": permissions,
-        "email": email,
-    }
+def seerr_user(id, name, email=None):
+    return {"id": id, "displayName": name, "email": email}
 
 
 @pytest.fixture
@@ -61,10 +55,7 @@ def example_config(tmp_path, monkeypatch):
 
 @respx.mock
 def test_run_ingests_history_and_reports_users(example_config, capsys):
-    mock_services(
-        tautulli_users=[(111, "matt"), (333, "emma")],
-        seerr_users=[seerr_user(1, "matt", plex_id=111, permissions=2)],
-    )
+    mock_services(tautulli_users=[(111, "matt"), (333, "emma")])
     assert main(["users"]) == 0
     assert main(["users", "set", "matt", "--include"]) == 0
     assert main(["users", "set", "emma", "--include"]) == 0
@@ -75,8 +66,7 @@ def test_run_ingests_history_and_reports_users(example_config, capsys):
     assert "dry_run=True" in out
     assert "0 new events" in out
     assert "2 included (emma, matt)" in out
-    assert "Warning: emma: no matching Seerr user" in out
-    assert "Warning: matt" not in out
+    assert "Warning" not in out
 
 
 @respx.mock
@@ -95,13 +85,13 @@ def test_run_prints_picks_and_reasons(example_config, capsys, monkeypatch):
     )
     title = Title(10, "movie", "Pick", 2020, 1000, 8.0, "PG", 8)
     picked = UserPicks(
-        users.User(111, "matt", True, None, None, None, None, None),
+        users.User(111, "matt", True, None, None),
         History(seeds=finished, unresolved=2),
         Picks([Pick(candidate, title)], candidates=4, checked=2, rated=1),
         None,
     )
     skipped = UserPicks(
-        users.User(333, "emma", True, 10, None, None, None, None),
+        users.User(333, "emma", True, 10, None),
         History(),
         None,
         "0 seeds, needs 3",
@@ -129,10 +119,9 @@ def live_config(example_config):
 
 
 HANDPICKED = seerr_user(5, "Handpicked", email=suggestions.REQUEST_USER_EMAIL)
-APPROVING = seerr_user(5, "Handpicked", permissions=2, email=HANDPICKED["email"])
 
 
-def user_picks(user_id, name, seerr, *tmdb_ids):
+def user_picks(user_id, name, *tmdb_ids):
     picks = [
         Pick(
             Candidate("movie", i, 8.0, [Seed("movie", 1, "Seed", 1.0)]),
@@ -140,9 +129,8 @@ def user_picks(user_id, name, seerr, *tmdb_ids):
         )
         for i in tmdb_ids
     ]
-    problem = None if seerr else "no matching Seerr user"
     return UserPicks(
-        users.User(user_id, name, True, None, None, None, seerr, problem),
+        users.User(user_id, name, True, None, None),
         History(seeds=[Seed("movie", 1, "Seed", 1.0)]),
         Picks(picks, candidates=4, checked=2, rated=2),
         None,
@@ -154,22 +142,22 @@ def test_run_requests_picks_and_syncs(live_config, capsys, monkeypatch):
     mock_services(
         tautulli_users=[(111, "matt"), (333, "emma")], seerr_users=[HANDPICKED]
     )
-    matt = users.SeerrUser(id=1, plex_id=111, display_name="matt", permissions=32)
     monkeypatch.setattr(
         cli,
         "recommend",
         lambda *args: [
-            user_picks(111, "matt", matt, 10, 11),
-            user_picks(333, "emma", None, 12),
+            user_picks(111, "matt", 10, 11),
+            user_picks(333, "emma", 12),
         ],
     )
     post = respx.post(f"{SEERR}/request").mock(
         side_effect=[
             httpx.Response(201, json={"id": 41}),
             httpx.Response(403, json={"message": "Movie Quota exceeded."}),
+            httpx.Response(201, json={"id": 42}),
         ]
     )
-    respx.put(f"{SEERR}/request/41").respond(json={"id": 41})
+    other = respx.route(method__in=["PUT", "DELETE"])
 
     assert main(["run"]) == 0
     out = capsys.readouterr().out
@@ -177,38 +165,42 @@ def test_run_requests_picks_and_syncs(live_config, capsys, monkeypatch):
     assert "1. Pick 10 (2020, movie, PG) score 1.20" in out
     assert "requested in Seerr (#41)" in out
     assert "not requested: /request: Movie Quota exceeded." in out
-    assert "1. Pick 12 (2020, movie, PG) score 1.20\n" in out
-    assert "not requested: no matching Seerr user" in out
+    assert "requested in Seerr (#42)" in out
     assert "Digest not configured, not sent" in out
-    assert post.call_count == 2
+    assert [c.request.headers["X-API-User"] for c in post.calls] == ["5"] * 3
+    assert not other.called
 
     respx.get(f"{SEERR}/request/41").respond(json={"status": 3})
+    respx.get(f"{SEERR}/request/42").respond(json={"status": 1})
     monkeypatch.setattr(cli, "recommend", lambda *args: [])
 
     assert main(["run"]) == 0
     assert "0 approved, 1 declined, 0 deleted" in capsys.readouterr().out
-    assert post.call_count == 2
+    assert post.call_count == 3
 
 
 @respx.mock
-def test_run_needs_a_usable_request_user(live_config, capsys):
-    mock_services(seerr_users=[APPROVING])
-    post = respx.post(f"{SEERR}/request")
+def test_a_request_seerr_approves_is_recorded_by_the_next_sync(
+    live_config, capsys, monkeypatch
+):
+    mock_services(tautulli_users=[(111, "matt")], seerr_users=[HANDPICKED])
+    monkeypatch.setattr(cli, "recommend", lambda *args: [user_picks(111, "matt", 10)])
+    respx.post(f"{SEERR}/request").respond(201, json={"id": 41, "status": 2})
 
-    assert main(["run"]) == 1
-    assert "Cannot create requests: Seerr user Handpicked must not have Admin" in (
-        capsys.readouterr().err
-    )
-    assert not post.called
+    assert main(["run"]) == 0
+    assert "requested in Seerr (#41)" in capsys.readouterr().out
+
+    respx.get(f"{SEERR}/request/41").respond(json={"status": 2})
+    monkeypatch.setattr(cli, "recommend", lambda *args: [])
+
+    assert main(["run"]) == 0
+    assert "1 approved, 0 declined, 0 deleted" in capsys.readouterr().out
 
 
 @respx.mock
 def test_live_run_creates_the_request_user(live_config, capsys, monkeypatch):
     mock_services(tautulli_users=[(111, "matt")])
-    matt = users.SeerrUser(id=1, plex_id=111, display_name="matt", permissions=32)
-    monkeypatch.setattr(
-        cli, "recommend", lambda *args: [user_picks(111, "matt", matt, 10)]
-    )
+    monkeypatch.setattr(cli, "recommend", lambda *args: [user_picks(111, "matt", 10)])
     # A new user gets the server's default permissions, here auto-approve.
     create = respx.post(f"{SEERR}/user").respond(
         201, json={"id": 9, "displayName": "Handpicked", "permissions": 32 | 128}
@@ -217,8 +209,10 @@ def test_live_run_creates_the_request_user(live_config, capsys, monkeypatch):
         json={"permissions": 32}
     )
     quota = respx.post(f"{SEERR}/user/9/settings/main").respond(json={})
+    notifications = respx.post(f"{SEERR}/user/9/settings/notifications").respond(
+        json={}
+    )
     post = respx.post(f"{SEERR}/request").respond(201, json={"id": 41})
-    respx.put(f"{SEERR}/request/41").respond(json={"id": 41})
 
     assert main(["run"]) == 0
     assert "Created Seerr user Handpicked (id 9)" in capsys.readouterr().out
@@ -232,16 +226,16 @@ def test_live_run_creates_the_request_user(live_config, capsys, monkeypatch):
         "movieQuotaLimit": 0,
         "tvQuotaLimit": 0,
     }
+    assert json.loads(notifications.calls.last.request.content) == {
+        "notificationTypes": {"email": 0}
+    }
     assert post.calls.last.request.headers["X-API-User"] == "9"
 
 
 @respx.mock
 def test_dry_run_warns_and_requests_nothing(example_config, capsys, monkeypatch):
     mock_services(tautulli_users=[(111, "matt")])
-    matt = users.SeerrUser(id=1, plex_id=111, display_name="matt", permissions=32)
-    monkeypatch.setattr(
-        cli, "recommend", lambda *args: [user_picks(111, "matt", matt, 10)]
-    )
+    monkeypatch.setattr(cli, "recommend", lambda *args: [user_picks(111, "matt", 10)])
     post = respx.post(f"{SEERR}/request")
     create = respx.post(f"{SEERR}/user")
 
@@ -283,10 +277,7 @@ def text_part(message):
 def test_dry_run_sends_the_digest(example_config, sent, capsys, monkeypatch):
     add_digest(example_config)
     mock_services(tautulli_users=[(111, "matt")])
-    matt = users.SeerrUser(id=1, plex_id=111, display_name="matt", permissions=32)
-    monkeypatch.setattr(
-        cli, "recommend", lambda *args: [user_picks(111, "matt", matt, 10)]
-    )
+    monkeypatch.setattr(cli, "recommend", lambda *args: [user_picks(111, "matt", 10)])
 
     assert main(["run"]) == 0
     (message,) = sent
@@ -298,36 +289,42 @@ def test_dry_run_sends_the_digest(example_config, sent, capsys, monkeypatch):
 @respx.mock
 def test_real_run_digest_shows_what_seerr_did(live_config, sent, monkeypatch):
     add_digest(live_config)
-    mock_services(tautulli_users=[(111, "matt")], seerr_users=[HANDPICKED])
-    matt = users.SeerrUser(id=1, plex_id=111, display_name="matt", permissions=32)
+    mock_services(
+        tautulli_users=[(111, "matt"), (333, "emma")], seerr_users=[HANDPICKED]
+    )
     monkeypatch.setattr(
         cli,
         "recommend",
         lambda *args: [
-            user_picks(111, "matt", matt, 10),
-            user_picks(333, "emma", None, 12),
+            user_picks(111, "matt", 10),
+            user_picks(333, "emma", 12),
         ],
     )
-    respx.post(f"{SEERR}/request").respond(201, json={"id": 41})
-    respx.put(f"{SEERR}/request/41").respond(json={"id": 41})
+    respx.post(f"{SEERR}/request").mock(
+        side_effect=[
+            httpx.Response(201, json={"id": 41}),
+            httpx.Response(201, json={"id": 42}),
+        ]
+    )
 
     assert main(["run"]) == 0
     text = text_part(sent[0])
     assert "DRY RUN" not in text
     assert "Since the last run: 0 approved, 0 declined, 0 deleted" in text
     assert "Requested in Seerr (#41)" in text
-    assert "Not requested: no matching Seerr user" in text
+    assert "Requested in Seerr (#42)" in text
 
 
 @respx.mock
 def test_stopped_run_still_sends_the_digest(live_config, sent):
     add_digest(live_config)
-    mock_services(seerr_users=[APPROVING])
+    mock_services()
+    respx.post(f"{SEERR}/user").respond(500, json={"message": "boom"})
 
     assert main(["run"]) == 1
     (message,) = sent
     assert message["Subject"] == "Handpicked: the run stopped"
-    assert "Cannot create requests: Seerr user Handpicked" in text_part(message)
+    assert "Seerr error: /user: boom" in text_part(message)
 
 
 @respx.mock
@@ -396,57 +393,30 @@ def test_digest_failure_fails_the_run(example_config, capsys, monkeypatch):
 
 @respx.mock
 def test_users_lists_discovered_users(example_config, capsys):
-    mock_services(
-        tautulli_users=[(111, "matt"), (333, "Emma")],
-        seerr_users=[
-            seerr_user(1, "matt", plex_id=111, permissions=2),
-            seerr_user(7, "emma"),
-        ],
-    )
+    mock_services(tautulli_users=[(111, "matt"), (333, "Emma")])
 
     assert main(["users"]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert lines[0].split() == [
-        "User",
-        "Included",
-        "Max",
-        "age",
-        "Picks",
-        "Seerr",
-        "user",
-        "Notes",
-    ]
-    assert lines[1].split()[:6] == ["Emma", "no", "-", "3", "(default)", "emma"]
-    assert "(id 7, by name)" in lines[1]
-    assert lines[2].endswith("matt (id 1, by plex)")
+    assert lines[0].split() == ["User", "Included", "Max", "age", "Picks"]
+    assert lines[1].split() == ["Emma", "no", "-", "3", "(default)"]
+    assert lines[2].split() == ["matt", "no", "-", "3", "(default)"]
+    assert not any(str(c.request.url).startswith(SEERR) for c in respx.calls)
 
 
 @respx.mock
-def test_users_set_and_link(example_config, capsys):
-    mock_services(
-        tautulli_users=[(333, "emma")],
-        seerr_users=[seerr_user(7, "kiddo")],
-    )
+def test_users_set(example_config, capsys):
+    mock_services(tautulli_users=[(333, "emma")])
     assert main(["users"]) == 0
 
     assert (
         main(["users", "set", "emma", "--include", "--max-age", "10", "--picks", "5"])
         == 0
     )
-    assert main(["users", "link", "emma", "7"]) == 0
     assert main(["users"]) == 0
 
     out = capsys.readouterr().out
     assert "Updated emma." in out
-    assert "Linked emma to Seerr user 7." in out
-    assert out.splitlines()[-1].split()[:6] == [
-        "emma",
-        "yes",
-        "10",
-        "5",
-        "kiddo",
-        "(id",
-    ]
+    assert out.splitlines()[-1].split() == ["emma", "yes", "10", "5"]
 
 
 def test_users_set_unknown_user(example_config, capsys):
@@ -464,15 +434,6 @@ def test_users_set_rejects_bad_values(example_config):
         main(["users", "set", "emma", "--picks", "0"])
     with pytest.raises(SystemExit):
         main(["users", "set", "emma", "--max-age", "10", "--no-max-age"])
-
-
-@respx.mock
-def test_seerr_error_exits_with_error(example_config, capsys):
-    respx.get(TAUTULLI).respond(json=tautulli_data([]))
-    respx.get(f"{SEERR}/user").mock(side_effect=httpx.ConnectError("refused"))
-
-    assert main(["users"]) == 1
-    assert "Seerr error" in capsys.readouterr().err
 
 
 @respx.mock

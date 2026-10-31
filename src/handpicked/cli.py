@@ -61,16 +61,10 @@ def _command(
                 return 2
             users.update_settings(conn, args.username, changes)
             print(f"Updated {args.username}.")
-        elif args.users_command == "link":
-            users.link(conn, seerr, args.username, args.seerr_user_id)
-            print(f"Linked {args.username} to Seerr user {args.seerr_user_id}.")
         else:
-            _print_users(users.discover(conn, tautulli, seerr), config.picks_per_run)
+            _print_users(users.discover(conn, tautulli), config.picks_per_run)
     except TautulliError as e:
         print(f"Tautulli error: {e}", file=sys.stderr)
-        return 1
-    except SeerrError as e:
-        print(f"Seerr error: {e}", file=sys.stderr)
         return 1
     except users.UserError as e:
         print(e, file=sys.stderr)
@@ -151,12 +145,6 @@ def _parser() -> argparse.ArgumentParser:
         default=argparse.SUPPRESS,
         help="Use picks_per_run from the config",
     )
-
-    link = users_commands.add_parser(
-        "link", help="Link a user to a Seerr user when discovery cannot"
-    )
-    link.add_argument("username")
-    link.add_argument("seerr_user_id", type=int)
     return parser
 
 
@@ -244,13 +232,6 @@ def _run_steps(
             f"Seerr user {suggestions.REQUEST_USER_NAME} not found;"
             " the first live run creates it"
         )
-    problem = as_user and suggestions.request_user_problem(as_user)
-    if problem and not dry_run:
-        report.stopped = f"Cannot create requests: {problem}"
-        return
-    if problem:
-        report.request_problem = problem
-        print(f"Warning: requests cannot be created yet: {problem}")
     if not dry_run:
         changes = report.changes = suggestions.sync(conn, seerr, now)
         print(
@@ -265,26 +246,19 @@ def _run_steps(
         f" {stats.unresolved} unresolved (retried next run)"
     )
 
-    household = users.discover(conn, tautulli, seerr)
+    household = users.discover(conn, tautulli)
     included = report.included = [u for u in household if u.include]
     excluded = report.excluded = [u for u in household if not u.include]
     print(f"Users: {_count(included, 'included')}, {_count(excluded, 'not included')}")
-    for user in included:
-        if user.problem:
-            print(f"Warning: {user.username}: {user.problem}")
 
     tmdb = Tmdb(config.services.tmdb.token, TmdbCache(conn))
     results = recommend(conn, config, tmdb, seerr, included, now)
     for result in results:
         requested = None
         if not dry_run and result.picks:
-            if result.user.seerr_user:
-                requested = suggestions.request(
-                    conn, seerr, as_user.id, result.user, result.picks.picks, now
-                )
-            else:
-                reason = result.user.problem or "no Seerr user"
-                requested = [Requested(p, None, reason) for p in result.picks.picks]
+            requested = suggestions.request(
+                conn, seerr, as_user.id, result.user, result.picks.picks, now
+            )
         _print_picks(result, requested)
         report.entries.append(Entry(result, requested))
     if report.checked:
@@ -351,19 +325,14 @@ def _print_users(household: list[users.User], default_picks: int) -> None:
     if not household:
         print("No users found in Tautulli.")
         return
-    rows = [("User", "Included", "Max age", "Picks", "Seerr user", "Notes")]
+    rows = [("User", "Included", "Max age", "Picks")]
     for user in household:
-        seerr_user = user.seerr_user
         rows.append(
             (
                 user.username,
                 "yes" if user.include else "no",
                 "-" if user.max_age is None else str(user.max_age),
                 str(user.picks_per_run or f"{default_picks} (default)"),
-                f"{seerr_user.display_name} (id {seerr_user.id}, by {user.seerr_link})"
-                if seerr_user
-                else "-",
-                user.problem or "",
             )
         )
     widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]

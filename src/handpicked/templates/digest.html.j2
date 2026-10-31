@@ -11,12 +11,6 @@
 <p style="margin:0 0 8px;font-weight:600;">The run stopped early:</p>
 <p style="margin:0 0 16px;color:#b42318;">{{ r.stopped }}</p>
 {% endif %}
-{% if r.request_problem %}
-<p style="margin:0 0 8px;color:#b42318;">Warning: requests cannot be created yet: {{ r.request_problem }}</p>
-{% endif %}
-{% for user in r.included if user.problem %}
-<p style="margin:0 0 8px;color:#b42318;">Warning: {{ user.username }}: {{ user.problem }}</p>
-{% endfor %}
 {% if r.changes is not none %}
 <p style="margin:0 0 16px;{{ muted }}">Since the last run: {{ r.changes["approved"] }} approved, {{ r.changes["declined"] }} declined, {{ r.changes["deleted"] }} deleted</p>
 {% endif %}

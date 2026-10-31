@@ -16,17 +16,15 @@ from handpicked.suggestions import (
     create_request_user,
     find_request_user,
     request,
-    request_user_problem,
     sync,
 )
 from handpicked.users import User
 
 URL = "http://seerr:5055/api/v1"
-MEMBER = SeerrUser(id=3, plex_id=None, display_name="kid", permissions=32)
 
 
-def member(user_id=7, seerr_user=MEMBER):
-    return User(user_id, f"user{user_id}", True, None, None, "name", seerr_user, None)
+def member(user_id=7):
+    return User(user_id, f"user{user_id}", True, None, None)
 
 
 def pick(tmdb_id, media_type="movie"):
@@ -50,35 +48,10 @@ def seerr():
     return Seerr("http://seerr:5055", "key")
 
 
-def reassign():
-    return respx.put(url__regex=rf"{URL}/request/\d+").respond(json={})
-
-
 def rows(conn):
     return conn.execute(
         "SELECT * FROM suggestions ORDER BY media_type, tmdb_id"
     ).fetchall()
-
-
-@pytest.mark.parametrize(
-    ("permissions", "problem"),
-    [
-        (32, None),  # REQUEST
-        (8 | 32, None),  # and MANAGE_USERS
-        (262144 | 524288, None),  # REQUEST_MOVIE and REQUEST_TV
-        (262144, "needs the Request permission"),  # REQUEST_MOVIE only
-        (8, "needs the Request permission"),
-        (32 | 128, "must not have Admin"),  # AUTO_APPROVE
-        (2, "must not have Admin"),  # ADMIN
-        (32 | 16, "must not have Admin"),  # MANAGE_REQUESTS
-    ],
-)
-def test_request_user_permissions(permissions, problem):
-    user = SeerrUser(5, None, "Handpicked", permissions, email=REQUEST_USER_EMAIL)
-
-    found = request_user_problem(user)
-
-    assert found is None if problem is None else problem in found
 
 
 @respx.mock
@@ -86,18 +59,22 @@ def test_creating_the_request_user_sets_it_up(seerr):
     respx.post(f"{URL}/user").respond(201, json={"id": 9})
     permissions = respx.post(f"{URL}/user/9/settings/permissions").respond(json={})
     quota = respx.post(f"{URL}/user/9/settings/main").respond(json={})
+    notifications = respx.post(f"{URL}/user/9/settings/notifications").respond(json={})
 
     user = create_request_user(seerr)
 
-    assert user == SeerrUser(9, None, "Handpicked", 32, email=REQUEST_USER_EMAIL)
-    assert permissions.called and quota.called
+    assert user == SeerrUser(9, "Handpicked", REQUEST_USER_EMAIL)
+    assert permissions.called and quota.called and notifications.called
 
 
 @respx.mock
 def test_a_half_created_request_user_is_deleted(seerr):
     respx.post(f"{URL}/user").respond(201, json={"id": 9})
     respx.post(f"{URL}/user/9/settings/permissions").respond(json={})
-    respx.post(f"{URL}/user/9/settings/main").respond(500, json={"message": "boom"})
+    respx.post(f"{URL}/user/9/settings/main").respond(json={})
+    respx.post(f"{URL}/user/9/settings/notifications").respond(
+        500, json={"message": "boom"}
+    )
     delete = respx.delete(f"{URL}/user/9").respond(json={"id": 9})
 
     with pytest.raises(SeerrError, match="boom"):
@@ -116,27 +93,27 @@ def test_a_failed_cleanup_says_the_user_is_left(seerr):
 
 
 def test_request_user_is_found_by_email():
-    handpicked = SeerrUser(5, None, "Bot", 32, email=REQUEST_USER_EMAIL.upper())
-    named = SeerrUser(6, None, "Handpicked", 32, email="admin@example.com")
+    handpicked = SeerrUser(5, "Bot", REQUEST_USER_EMAIL.upper())
+    named = SeerrUser(6, "Handpicked", "admin@example.com")
+    member = SeerrUser(3, "kid")
 
-    assert find_request_user([MEMBER, named, handpicked]) is handpicked
-    assert find_request_user([MEMBER, named]) is None
+    assert find_request_user([member, named, handpicked]) is handpicked
+    assert find_request_user([member, named]) is None
 
 
 @respx.mock
 def test_request_records_each_created_request(conn, seerr):
-    respx.post(f"{URL}/request").mock(
+    route = respx.post(f"{URL}/request").mock(
         side_effect=[
             httpx.Response(201, json={"id": 41}),
-            httpx.Response(201, json={"id": 42, "seasons": [{"seasonNumber": 1}]}),
+            httpx.Response(201, json={"id": 42}),
         ]
     )
-    route = reassign()
 
     results = request(conn, seerr, 5, member(), [pick(10), pick(11, "tv")], NOW)
 
     assert [r.request_id for r in results] == [41, 42]
-    assert [json.loads(c.request.content)["userId"] for c in route.calls] == [3, 3]
+    assert [c.request.headers["X-API-User"] for c in route.calls] == ["5", "5"]
     movie, tv = rows(conn)
     assert (movie["user_id"], movie["media_type"], movie["tmdb_id"]) == (7, "movie", 10)
     assert (tv["media_type"], tv["tmdb_id"], tv["seerr_request_id"]) == ("tv", 11, 42)
@@ -148,7 +125,6 @@ def test_request_records_each_created_request(conn, seerr):
 @respx.mock
 def test_stored_seeds_sum_to_the_score(conn, seerr):
     respx.post(f"{URL}/request").respond(201, json={"id": 41})
-    reassign()
     picked = pick(10)
 
     request(conn, seerr, 5, member(), [picked], NOW)
@@ -172,7 +148,6 @@ def test_refused_requests_are_reported_and_not_recorded(conn, seerr):
             httpx.Response(201, json={"id": 42}),
         ]
     )
-    reassign()
 
     refused, created = request(conn, seerr, 5, member(), [pick(10), pick(11)], NOW)
 
@@ -185,7 +160,6 @@ def test_refused_requests_are_reported_and_not_recorded(conn, seerr):
 @respx.mock
 def test_requested_titles_are_not_picked_again(conn, seerr):
     respx.post(f"{URL}/request").respond(201, json={"id": 41})
-    reassign()
     watch(conn, 7, 1, 2)
     tmdb = FakeTmdb({("movie", 1): [rec(i) for i in range(10, 16)]})
 

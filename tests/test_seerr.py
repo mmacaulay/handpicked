@@ -74,8 +74,8 @@ def test_users(seerr):
     )
 
     assert seerr.users() == [
-        SeerrUser(id=1, plex_id=111, display_name="matt", permissions=2),
-        SeerrUser(7, None, "Kid", 32, email="kid@example.com"),
+        SeerrUser(id=1, display_name="matt"),
+        SeerrUser(7, "Kid", "kid@example.com"),
     ]
 
 
@@ -86,11 +86,13 @@ def test_create_set_up_and_delete_a_user(seerr):
         json={"permissions": 32}
     )
     quota = respx.post(f"{URL}/user/9/settings/main").respond(json={})
+    notifications = respx.post(f"{URL}/user/9/settings/notifications").respond(json={})
     delete = respx.delete(f"{URL}/user/9").respond(json={"id": 9})
 
     assert seerr.create_user("bot@example.com", "Bot", "secret") == 9
     seerr.set_permissions(9, 32)
     seerr.remove_quota(9, "Bot", "bot@example.com")
+    seerr.disable_email(9)
     seerr.delete_user(9)
 
     assert json.loads(create.calls.last.request.content) == {
@@ -105,25 +107,10 @@ def test_create_set_up_and_delete_a_user(seerr):
         "movieQuotaLimit": 0,
         "tvQuotaLimit": 0,
     }
+    assert json.loads(notifications.calls.last.request.content) == {
+        "notificationTypes": {"email": 0}
+    }
     assert delete.called
-
-
-@pytest.mark.parametrize(
-    ("permissions", "auto_approve"),
-    [
-        (2, True),  # ADMIN
-        (16, True),  # MANAGE_REQUESTS
-        (128, True),  # AUTO_APPROVE
-        (256 | 32, True),  # AUTO_APPROVE_MOVIE
-        (512 | 32, True),  # AUTO_APPROVE_TV
-        (32, False),  # REQUEST
-        (32768 | 32, False),  # AUTO_APPROVE_4K only affects 4K requests
-        (0, False),
-    ],
-)
-def test_auto_approve(permissions, auto_approve):
-    user = SeerrUser(id=1, plex_id=None, display_name="x", permissions=permissions)
-    assert user.auto_approve is auto_approve
 
 
 @respx.mock
@@ -204,30 +191,24 @@ def test_connection_error_raises(seerr):
 
 
 @respx.mock
-def test_create_request_then_reassign_it(seerr):
+def test_create_request_as_a_user(seerr):
     post = respx.post(f"{URL}/request").respond(201, json={"id": 42})
-    put = respx.put(f"{URL}/request/42").respond(json={"id": 42})
+    other = respx.route(method__in=["PUT", "DELETE"])
 
-    assert seerr.create_request(5, 3, "movie", 603) == 42
-    created, reassigned = post.calls[0].request, put.calls[0].request
+    assert seerr.create_request(5, "movie", 603) == 42
+    created = post.calls[0].request
     assert created.headers["X-Api-Key"] == "key"
     assert created.headers["X-API-User"] == "5"
     assert json.loads(created.content) == {"mediaType": "movie", "mediaId": 603}
-    assert reassigned.headers["X-Api-Key"] == "key"
-    assert "X-API-User" not in reassigned.headers
-    assert json.loads(reassigned.content) == {"mediaType": "movie", "userId": 3}
+    assert not other.called
 
 
 @respx.mock
-def test_tv_request_asks_for_all_seasons_and_keeps_them(seerr):
-    post = respx.post(f"{URL}/request").respond(
-        201, json={"id": 42, "seasons": [{"seasonNumber": 1}, {"seasonNumber": 2}]}
-    )
-    put = respx.put(f"{URL}/request/42").respond(json={"id": 42})
+def test_tv_request_asks_for_all_seasons(seerr):
+    post = respx.post(f"{URL}/request").respond(201, json={"id": 42})
 
-    seerr.create_request(5, 3, "tv", 1399)
+    seerr.create_request(5, "tv", 1399)
     assert json.loads(post.calls[0].request.content)["seasons"] == "all"
-    assert json.loads(put.calls[0].request.content)["seasons"] == [1, 2]
 
 
 @pytest.mark.parametrize(
@@ -241,41 +222,10 @@ def test_tv_request_asks_for_all_seasons_and_keeps_them(seerr):
 @respx.mock
 def test_refused_request_raises_with_seerr_message(seerr, status, message):
     respx.post(f"{URL}/request").respond(status, json={"message": message})
-    put = respx.put(url__regex=r".*")
 
     with pytest.raises(SeerrError, match=message) as error:
-        seerr.create_request(5, 3, "tv", 1399)
+        seerr.create_request(5, "tv", 1399)
     assert error.value.status_code == status
-    assert not put.called
-
-
-@respx.mock
-def test_refused_reassign_deletes_the_request(seerr):
-    respx.post(f"{URL}/request").respond(201, json={"id": 42})
-    respx.put(f"{URL}/request/42").respond(
-        403, json={"message": "Movie Quota exceeded."}
-    )
-    delete = respx.delete(f"{URL}/request/42").respond(204)
-
-    with pytest.raises(SeerrError, match="Movie Quota exceeded.") as error:
-        seerr.create_request(5, 3, "movie", 603)
-    assert error.value.status_code == 403
-    assert delete.called
-
-
-@respx.mock
-def test_failed_cleanup_says_the_request_is_left(seerr):
-    respx.post(f"{URL}/request").respond(201, json={"id": 42})
-    respx.put(f"{URL}/request/42").respond(
-        403, json={"message": "Movie Quota exceeded."}
-    )
-    respx.delete(f"{URL}/request/42").respond(500, json={"message": "boom"})
-
-    with pytest.raises(
-        SeerrError,
-        match="Movie Quota exceeded.; /request/42 is still in Seerr as user 5's",
-    ):
-        seerr.create_request(5, 3, "movie", 603)
 
 
 @respx.mock
