@@ -81,8 +81,9 @@ class Seerr:
         )
 
     def disable_email(self, user_id: int) -> None:
-        """Send the user no email notifications. Other agents are unchanged."""
-        # Seerr merges notificationTypes into the user's saved ones.
+        """Send a new user no email notifications."""
+        # Seerr merges notificationTypes into the user's saved ones, but resets
+        # other notification settings, such as Discord ids, from this body.
         self._send(
             "POST",
             f"/user/{user_id}/settings/notifications",
