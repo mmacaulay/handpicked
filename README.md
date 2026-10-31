@@ -6,7 +6,11 @@ See `docs/PRODUCT.md` for the why and `docs/V1.md` for the spec.
 
 ## Running on Unraid
 
-1. **Add the container.** In the Docker tab, add a container from the template at `unraid/handpicked.xml`, or save that file to `/boot/config/plugins/dockerMan/templates-user/` and pick it from the template list.
+1. **Add the container.** Save the template as `my-handpicked.xml`, from the Unraid terminal:
+   ```
+   wget -O /boot/config/plugins/dockerMan/templates-user/my-handpicked.xml https://raw.githubusercontent.com/mmacaulay/handpicked/main/unraid/handpicked.xml
+   ```
+   Then in the Docker tab, click "Add Container" and pick handpicked from the template list. Keep the `my-` prefix: Unraid saves the values you fill in to that file, and the container's Edit form reads them back from it. A second copy under another name can make Edit show empty fields.
 2. **Fill in the template.** The Tautulli, Seerr, and TMDB fields are required. The SMTP fields are optional: fill them in to get the digest email. The schedule (default Sundays at 09:00, in the server's time zone) and picks per run are under "Show more settings". Then start the container. The log shows the next run time.
 3. **Opt users in.** Nobody gets picks until included:
    ```
