@@ -60,22 +60,18 @@ class Seerr:
             for user in self._paged("/user")
         ]
 
-    def create_user(self, email: str, username: str, password: str) -> SeerrUser:
-        """Create a local user, with the server's default permissions."""
+    def create_user(self, email: str, username: str, password: str) -> int:
+        """Create a local user, with the server's default permissions and quota.
+
+        Returns its id.
+        """
         user = self._send(
             "POST",
             "/user",
             expected=201,
             json={"email": email, "username": username, "password": password},
         )
-        # The response leaves out the email, and may the display name.
-        return SeerrUser(
-            id=user["id"],
-            plex_id=None,
-            display_name=user.get("displayName") or username,
-            permissions=user["permissions"],
-            email=email,
-        )
+        return user["id"]
 
     def set_permissions(self, user_id: int, permissions: int) -> None:
         self._send(
@@ -83,6 +79,23 @@ class Seerr:
             f"/user/{user_id}/settings/permissions",
             json={"permissions": permissions},
         )
+
+    def remove_quota(self, user_id: int, username: str, email: str) -> None:
+        """Let the user request without limit. A limit of 0 means none."""
+        # Seerr sets the username and email from this body too.
+        self._send(
+            "POST",
+            f"/user/{user_id}/settings/main",
+            json={
+                "username": username,
+                "email": email,
+                "movieQuotaLimit": 0,
+                "tvQuotaLimit": 0,
+            },
+        )
+
+    def delete_user(self, user_id: int) -> None:
+        self._send("DELETE", f"/user/{user_id}")
 
     def owned(self) -> set[Title]:
         """Titles in the library, or monitored in Radarr or Sonarr."""

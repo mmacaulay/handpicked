@@ -4,7 +4,7 @@ import json
 import secrets
 import sqlite3
 from collections import Counter
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from handpicked.picks import Candidate, Pick
 from handpicked.seerr import REQUEST, REQUEST_MOVIE_AND_TV, Seerr, SeerrError, SeerrUser
@@ -37,12 +37,25 @@ def find_request_user(seerr_users: list[SeerrUser]) -> SeerrUser | None:
 def create_request_user(seerr: Seerr) -> SeerrUser:
     """Create Handpicked's Seerr user, able to request but not to approve."""
     # Nobody logs in as it. Seerr needs a password, or email to send one.
-    user = seerr.create_user(
+    user_id = seerr.create_user(
         REQUEST_USER_EMAIL, REQUEST_USER_NAME, secrets.token_urlsafe(32)
     )
-    # Its default permissions are the server's, which may approve requests.
-    seerr.set_permissions(user.id, REQUEST)
-    return replace(user, permissions=REQUEST)
+    try:
+        # A new user gets the server's default permissions, which may approve
+        # requests, and its default quota, which would refuse picks.
+        seerr.set_permissions(user_id, REQUEST)
+        seerr.remove_quota(user_id, REQUEST_USER_NAME, REQUEST_USER_EMAIL)
+    except SeerrError as e:
+        # Otherwise the next run finds it half set up, and stops.
+        try:
+            seerr.delete_user(user_id)
+        except SeerrError as cleanup:
+            raise SeerrError(
+                f"{e}; Seerr user {user_id} is left half set up: {cleanup}",
+                e.status_code,
+            ) from e
+        raise
+    return SeerrUser(user_id, None, REQUEST_USER_NAME, REQUEST, REQUEST_USER_EMAIL)
 
 
 def request_user_problem(user: SeerrUser) -> str | None:

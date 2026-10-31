@@ -13,6 +13,7 @@ from handpicked.seeds import Seed
 from handpicked.seerr import Seerr, SeerrError, SeerrUser
 from handpicked.suggestions import (
     REQUEST_USER_EMAIL,
+    create_request_user,
     find_request_user,
     request,
     request_user_problem,
@@ -78,6 +79,40 @@ def test_request_user_permissions(permissions, problem):
     found = request_user_problem(user)
 
     assert found is None if problem is None else problem in found
+
+
+@respx.mock
+def test_creating_the_request_user_sets_it_up(seerr):
+    respx.post(f"{URL}/user").respond(201, json={"id": 9})
+    permissions = respx.post(f"{URL}/user/9/settings/permissions").respond(json={})
+    quota = respx.post(f"{URL}/user/9/settings/main").respond(json={})
+
+    user = create_request_user(seerr)
+
+    assert user == SeerrUser(9, None, "Handpicked", 32, email=REQUEST_USER_EMAIL)
+    assert permissions.called and quota.called
+
+
+@respx.mock
+def test_a_half_created_request_user_is_deleted(seerr):
+    respx.post(f"{URL}/user").respond(201, json={"id": 9})
+    respx.post(f"{URL}/user/9/settings/permissions").respond(json={})
+    respx.post(f"{URL}/user/9/settings/main").respond(500, json={"message": "boom"})
+    delete = respx.delete(f"{URL}/user/9").respond(json={"id": 9})
+
+    with pytest.raises(SeerrError, match="boom"):
+        create_request_user(seerr)
+    assert delete.called
+
+
+@respx.mock
+def test_a_failed_cleanup_says_the_user_is_left(seerr):
+    respx.post(f"{URL}/user").respond(201, json={"id": 9})
+    respx.post(f"{URL}/user/9/settings/permissions").respond(500, json={})
+    respx.delete(f"{URL}/user/9").respond(500, json={"message": "nope"})
+
+    with pytest.raises(SeerrError, match="Seerr user 9 is left half set up: .*nope"):
+        create_request_user(seerr)
 
 
 def test_request_user_is_found_by_email():

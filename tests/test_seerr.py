@@ -80,23 +80,32 @@ def test_users(seerr):
 
 
 @respx.mock
-def test_create_user_and_set_its_permissions(seerr):
-    # Seerr leaves the email out of the new user it returns.
-    create = respx.post(f"{URL}/user").respond(201, json={"id": 9, "permissions": 2})
+def test_create_set_up_and_delete_a_user(seerr):
+    create = respx.post(f"{URL}/user").respond(201, json={"id": 9})
     permissions = respx.post(f"{URL}/user/9/settings/permissions").respond(
         json={"permissions": 32}
     )
+    quota = respx.post(f"{URL}/user/9/settings/main").respond(json={})
+    delete = respx.delete(f"{URL}/user/9").respond(json={"id": 9})
 
-    user = seerr.create_user("bot@example.com", "Bot", "secret")
+    assert seerr.create_user("bot@example.com", "Bot", "secret") == 9
     seerr.set_permissions(9, 32)
+    seerr.remove_quota(9, "Bot", "bot@example.com")
+    seerr.delete_user(9)
 
-    assert user == SeerrUser(9, None, "Bot", 2, email="bot@example.com")
     assert json.loads(create.calls.last.request.content) == {
         "email": "bot@example.com",
         "username": "Bot",
         "password": "secret",
     }
     assert json.loads(permissions.calls.last.request.content) == {"permissions": 32}
+    assert json.loads(quota.calls.last.request.content) == {
+        "username": "Bot",
+        "email": "bot@example.com",
+        "movieQuotaLimit": 0,
+        "tvQuotaLimit": 0,
+    }
+    assert delete.called
 
 
 @pytest.mark.parametrize(

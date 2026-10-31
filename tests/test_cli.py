@@ -216,6 +216,7 @@ def test_live_run_creates_the_request_user(live_config, capsys, monkeypatch):
     permissions = respx.post(f"{SEERR}/user/9/settings/permissions").respond(
         json={"permissions": 32}
     )
+    quota = respx.post(f"{SEERR}/user/9/settings/main").respond(json={})
     post = respx.post(f"{SEERR}/request").respond(201, json={"id": 41})
     respx.put(f"{SEERR}/request/41").respond(json={"id": 41})
 
@@ -225,6 +226,7 @@ def test_live_run_creates_the_request_user(live_config, capsys, monkeypatch):
     assert body["email"] == suggestions.REQUEST_USER_EMAIL
     assert len(body["password"]) >= 32
     assert json.loads(permissions.calls.last.request.content) == {"permissions": 32}
+    assert quota.called
     assert post.calls.last.request.headers["X-API-User"] == "9"
 
 
