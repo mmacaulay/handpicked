@@ -46,6 +46,9 @@ def create_request_user(seerr: Seerr) -> SeerrUser:
         # is left to the admin, who can still give it auto-approve.
         seerr.set_permissions(user_id, REQUEST)
         seerr.remove_quota(user_id, REQUEST_USER_NAME, REQUEST_USER_EMAIL)
+        # Seerr emails a user every notification by default, here to an
+        # address that can't receive them.
+        seerr.disable_email(user_id)
     except SeerrError as e:
         # Otherwise the next run finds it and requests as it, half set up.
         try:

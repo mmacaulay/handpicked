@@ -209,6 +209,9 @@ def test_live_run_creates_the_request_user(live_config, capsys, monkeypatch):
         json={"permissions": 32}
     )
     quota = respx.post(f"{SEERR}/user/9/settings/main").respond(json={})
+    notifications = respx.post(f"{SEERR}/user/9/settings/notifications").respond(
+        json={}
+    )
     post = respx.post(f"{SEERR}/request").respond(201, json={"id": 41})
 
     assert main(["run"]) == 0
@@ -222,6 +225,9 @@ def test_live_run_creates_the_request_user(live_config, capsys, monkeypatch):
         "email": suggestions.REQUEST_USER_EMAIL,
         "movieQuotaLimit": 0,
         "tvQuotaLimit": 0,
+    }
+    assert json.loads(notifications.calls.last.request.content) == {
+        "notificationTypes": {"email": 0}
     }
     assert post.calls.last.request.headers["X-API-User"] == "9"
 

@@ -59,18 +59,22 @@ def test_creating_the_request_user_sets_it_up(seerr):
     respx.post(f"{URL}/user").respond(201, json={"id": 9})
     permissions = respx.post(f"{URL}/user/9/settings/permissions").respond(json={})
     quota = respx.post(f"{URL}/user/9/settings/main").respond(json={})
+    notifications = respx.post(f"{URL}/user/9/settings/notifications").respond(json={})
 
     user = create_request_user(seerr)
 
     assert user == SeerrUser(9, "Handpicked", REQUEST_USER_EMAIL)
-    assert permissions.called and quota.called
+    assert permissions.called and quota.called and notifications.called
 
 
 @respx.mock
 def test_a_half_created_request_user_is_deleted(seerr):
     respx.post(f"{URL}/user").respond(201, json={"id": 9})
     respx.post(f"{URL}/user/9/settings/permissions").respond(json={})
-    respx.post(f"{URL}/user/9/settings/main").respond(500, json={"message": "boom"})
+    respx.post(f"{URL}/user/9/settings/main").respond(json={})
+    respx.post(f"{URL}/user/9/settings/notifications").respond(
+        500, json={"message": "boom"}
+    )
     delete = respx.delete(f"{URL}/user/9").respond(json={"id": 9})
 
     with pytest.raises(SeerrError, match="boom"):

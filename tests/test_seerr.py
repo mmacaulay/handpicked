@@ -86,11 +86,13 @@ def test_create_set_up_and_delete_a_user(seerr):
         json={"permissions": 32}
     )
     quota = respx.post(f"{URL}/user/9/settings/main").respond(json={})
+    notifications = respx.post(f"{URL}/user/9/settings/notifications").respond(json={})
     delete = respx.delete(f"{URL}/user/9").respond(json={"id": 9})
 
     assert seerr.create_user("bot@example.com", "Bot", "secret") == 9
     seerr.set_permissions(9, 32)
     seerr.remove_quota(9, "Bot", "bot@example.com")
+    seerr.disable_email(9)
     seerr.delete_user(9)
 
     assert json.loads(create.calls.last.request.content) == {
@@ -104,6 +106,9 @@ def test_create_set_up_and_delete_a_user(seerr):
         "email": "bot@example.com",
         "movieQuotaLimit": 0,
         "tvQuotaLimit": 0,
+    }
+    assert json.loads(notifications.calls.last.request.content) == {
+        "notificationTypes": {"email": 0}
     }
     assert delete.called
 
