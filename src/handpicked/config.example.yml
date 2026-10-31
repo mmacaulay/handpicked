@@ -25,9 +25,10 @@ services:
   tmdb:
     token: your-tmdb-v4-read-token
 
-# Compute and report everything, write nothing to Seerr. On by default so a
-# fresh install is safe; set to false once the dry-run picks look right.
-dry_run: true
+# Compute and report everything, write nothing to Seerr. Off by default: no
+# user gets picks until opted in, and every request waits for the admin's
+# approval in Seerr. `handpicked run --dry-run` previews a single run.
+# dry_run: true
 
 # Cron expression for the run (default: Sundays at 09:00), in the container's
 # time zone (TZ). Name the day of the week (SUN, MON-FRI): numbers are

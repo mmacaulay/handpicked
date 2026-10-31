@@ -22,13 +22,13 @@ def write(tmp_path: Path, text: str) -> Path:
 
 def test_example_config_is_valid():
     config = load_config(EXAMPLE, environ={})
-    assert config.dry_run is True
+    assert config.dry_run is False
     assert config.digest is None
 
 
 def test_defaults(tmp_path):
     config = load_config(write(tmp_path, MINIMAL), environ={})
-    assert config.dry_run is True
+    assert config.dry_run is False
     assert config.picks_per_run == 3
     assert config.thresholds.completion_pct == 80
 
@@ -102,7 +102,7 @@ def test_environment_alone_is_a_config(tmp_path):
     assert config.services.seerr.url == "http://seerr:5055"
     assert config.schedule == "30 6 * * MON-FRI"
     assert config.picks_per_run == 5
-    assert config.dry_run is True
+    assert config.dry_run is False
     digest = config.digest
     assert (digest.host, digest.security, digest.port) == (
         "smtp.example.com",

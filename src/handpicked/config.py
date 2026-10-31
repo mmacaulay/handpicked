@@ -110,7 +110,7 @@ class Digest(Model):
 
 class Config(Model):
     services: Services
-    dry_run: bool = True
+    dry_run: bool = False
     schedule: str = "0 9 * * SUN"
     picks_per_run: int = Field(3, ge=1)
     thresholds: Thresholds = Field(default_factory=Thresholds)
