@@ -3,7 +3,7 @@
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import yaml
 from apscheduler.triggers.cron import CronTrigger
@@ -11,6 +11,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StringConstraints,
     ValidationError,
     field_validator,
     model_validator,
@@ -43,11 +44,11 @@ REQUIRED = {
     ("services", "seerr", "url"): "Seerr URL",
     ("services", "seerr", "api_key"): "Seerr API key",
     ("services", "tmdb", "token"): "TMDB read access token",
-}
-REQUIRED_FOR_DIGEST = {
     ("digest", "host"): "SMTP host",
     ("digest", "recipients"): "Digest recipients",
 }
+
+NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class ConfigError(Exception):
@@ -60,12 +61,12 @@ class Model(BaseModel):
 
 
 class Service(Model):
-    url: str
-    api_key: str
+    url: NonBlank
+    api_key: NonBlank
 
 
 class Tmdb(Model):
-    token: str
+    token: NonBlank
 
 
 class Services(Model):
@@ -85,7 +86,7 @@ class Thresholds(Model):
 
 
 class Digest(Model):
-    host: str
+    host: NonBlank
     port: int | None = None  # 465 for ssl, 587 for starttls, 25 for none
     security: Literal["starttls", "ssl", "none"] = "starttls"
     username: str | None = None
@@ -158,16 +159,13 @@ def load_config(path: Path, environ: Mapping[str, str] = os.environ) -> Config:
     try:
         return Config.model_validate(raw)
     except ValidationError as e:
-        # Only when nothing else is wrong, so a misspelled key is still named.
-        if all(error["type"] == "missing" for error in e.errors()):
-            _check_required(raw, path)
-        raise ConfigError(f"Invalid config in {path}:\n{e}") from e
+        raise ConfigError(_describe(e, path)) from None
 
 
 def _apply_env_overrides(raw: dict, environ: Mapping[str, str]) -> None:
     for var, keys in ENV_VARS.items():
         # Unraid passes a template field left blank as an empty value.
-        value: str | list[str] | None = environ.get(var)
+        value: str | list[str] = environ.get(var, "").strip()
         if not value:
             continue
         if var in LIST_ENV_VARS:
@@ -180,25 +178,33 @@ def _apply_env_overrides(raw: dict, environ: Mapping[str, str]) -> None:
         node[keys[-1]] = value
 
 
-def _check_required(raw: dict, path: Path) -> None:
-    """Name missing settings as the template does, if any are."""
-    required = dict(REQUIRED)
-    if isinstance(raw.get("digest"), dict):
-        required |= REQUIRED_FOR_DIGEST
-    missing = [label for keys, label in required.items() if not _lookup(raw, keys)]
-    if not missing:
-        return
-    where = path if path.exists() else f"{path} (not found)"
-    raise ConfigError(
-        f"Missing settings: {', '.join(missing)}. Fill them in on the"
-        f" container's template, or set them in {where}."
+def _describe(error: ValidationError, path: Path) -> str:
+    """Name missing or blank settings as the template does, then any other errors."""
+    missing: set[str] = set()
+    invalid = []
+    for e in error.errors():
+        loc = tuple(e["loc"])
+        # A missing section stands for every required setting in it.
+        labels = {label for keys, label in REQUIRED.items() if keys[: len(loc)] == loc}
+        if labels and (e["type"] == "missing" or _is_blank(e["input"])):
+            missing |= labels
+        else:
+            # Without the input value, which can be a secret.
+            invalid.append(f"- {'.'.join(map(str, loc))}: {e['msg']}")
+    lines = []
+    if missing:
+        names = [label for label in REQUIRED.values() if label in missing]
+        where = path if path.exists() else f"{path} (not found)"
+        lines.append(
+            f"Missing settings: {', '.join(names)}. Fill them in on the"
+            f" container's template, or set them in {where}."
+        )
+    if invalid:
+        lines += [f"Invalid config in {path}:", *invalid]
+    return "\n".join(lines)
+
+
+def _is_blank(value: object) -> bool:
+    return (
+        value is None or value == [] or (isinstance(value, str) and not value.strip())
     )
-
-
-def _lookup(raw: dict, keys: tuple[str, ...]) -> object:
-    node: object = raw
-    for key in keys:
-        if not isinstance(node, dict):
-            return None
-        node = node.get(key)
-    return node

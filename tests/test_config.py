@@ -70,9 +70,10 @@ def test_env_supplies_secret_missing_from_file(tmp_path):
     assert config.services.tmdb.token == "m"
 
 
-def test_empty_env_value_does_not_override(tmp_path):
+@pytest.mark.parametrize("blank", ["", "  "])
+def test_blank_env_value_does_not_override(tmp_path, blank):
     config = load_config(
-        write(tmp_path, MINIMAL), environ={"HANDPICKED_TMDB_TOKEN": ""}
+        write(tmp_path, MINIMAL), environ={"HANDPICKED_TMDB_TOKEN": blank}
     )
     assert config.services.tmdb.token == "m"
 
@@ -147,13 +148,77 @@ def test_missing_settings_are_named_as_in_the_template(tmp_path):
     assert "(not found)" in str(raised.value)
 
 
-def test_a_misspelled_key_is_named_not_reported_missing(tmp_path):
+def test_a_misspelled_key_is_named_with_the_missing_setting(tmp_path):
     text = MINIMAL.replace("{token: m}", "{tokn: m}")
 
-    with pytest.raises(ConfigError, match="tokn") as raised:
+    with pytest.raises(ConfigError) as raised:
+        load_config(write(tmp_path, text), environ={})
+
+    assert str(raised.value).startswith("Missing settings: TMDB read access token.")
+    assert "services.tmdb.tokn: Extra inputs are not permitted" in str(raised.value)
+
+
+def test_a_missing_setting_does_not_hide_other_errors(tmp_path):
+    text = MINIMAL.replace("  tmdb: {token: m}\n", "") + 'schedule: "0 9 * * 0"\n'
+
+    with pytest.raises(ConfigError) as raised:
+        load_config(write(tmp_path, text), environ={})
+
+    assert str(raised.value).startswith("Missing settings: TMDB read access token.")
+    assert "schedule: Value error, name the day of the week" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("text", "error"),
+    [
+        (
+            MINIMAL.replace("{url: http://tautulli:8181, api_key: t}", "http://t:8181"),
+            "services.tautulli: Input should be a valid dictionary",
+        ),
+        (
+            MINIMAL.replace("api_key: t}", "api_key: 0}"),
+            "services.tautulli.api_key: Input should be a valid string",
+        ),
+        ("services: [a]\n", "services: Input should be a valid dictionary"),
+    ],
+)
+def test_a_wrong_type_is_not_called_missing(tmp_path, text, error):
+    with pytest.raises(ConfigError) as raised:
         load_config(write(tmp_path, text), environ={})
 
     assert "Missing settings" not in str(raised.value)
+    assert error in str(raised.value)
+
+
+def test_an_invalid_value_is_not_echoed(tmp_path):
+    text = MINIMAL.replace("api_key: s}", "api_key: [s3cret]}")
+
+    with pytest.raises(ConfigError) as raised:
+        load_config(write(tmp_path, text), environ={})
+
+    assert "services.seerr.api_key" in str(raised.value)
+    assert "s3cret" not in str(raised.value)
+    assert raised.value.__cause__ is None and raised.value.__suppress_context__
+
+
+@pytest.mark.parametrize(
+    "blank", ['api_key: ""', 'api_key: "  "', "api_key:", "api_key: null"]
+)
+def test_a_blank_setting_is_missing(tmp_path, blank):
+    text = MINIMAL.replace("tautulli: {url: http://tautulli:8181, api_key: t}", "")
+    text = text.replace(
+        "services:\n", f"services:\n  tautulli:\n    url: u\n    {blank}\n"
+    )
+
+    with pytest.raises(ConfigError, match="^Missing settings: Tautulli API key"):
+        load_config(write(tmp_path, text), environ={})
+
+
+def test_a_blank_section_is_missing(tmp_path):
+    text = MINIMAL.replace("{url: http://tautulli:8181, api_key: t}", "")
+
+    with pytest.raises(ConfigError, match="^Missing settings: Tautulli URL, Tautulli"):
+        load_config(write(tmp_path, text), environ={})
 
 
 def test_a_partial_digest_names_what_it_still_needs(tmp_path):
