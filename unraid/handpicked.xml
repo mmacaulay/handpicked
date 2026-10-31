@@ -9,7 +9,7 @@
     <Shell>bash</Shell>
     <Project>https://github.com/mmacaulay/handpicked</Project>
     <ReadMe>https://github.com/mmacaulay/handpicked#readme</ReadMe>
-    <Overview>Household-curator recommender for Plex. Each week it picks a few titles for each household member from their Tautulli watch history and TMDB recommendations, queues them as pending requests in Seerr on their behalf, and emails the admin a digest of who each pick is for and why. Fill in the Tautulli, Seerr, and TMDB fields, start the container, then opt users in: docker exec handpicked handpicked users set NAME --include</Overview>
+    <Overview>Household-curator recommender for Plex. Each week it picks a few titles for each household member from their Tautulli watch history and TMDB recommendations, queues them as pending requests in Seerr, and emails the admin a digest of who each pick is for and why. Fill in the Tautulli, Seerr, and TMDB fields, start the container, then opt users in: docker exec handpicked handpicked users set NAME --include</Overview>
     <Category>MediaApp:Other Tools:</Category>
     <WebUI/>
     <TemplateURL>https://raw.githubusercontent.com/mmacaulay/handpicked/main/unraid/handpicked.xml</TemplateURL>
