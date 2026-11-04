@@ -173,16 +173,18 @@ def test_requested_titles_are_not_picked_again(conn, seerr):
     assert second_ids == [13, 14, 15]
 
 
-def suggest(conn, tmdb_id, request_id, status="requested"):
+def suggest(
+    conn, tmdb_id, request_id, status="requested", media_type="movie", approved_at=None
+):
     with conn:
         conn.execute(
             """
             INSERT INTO suggestions (
                 user_id, media_type, tmdb_id, score, seeds, status,
-                seerr_request_id, proposed_at, requested_at
-            ) VALUES (7, 'movie', ?, 1, '[]', ?, ?, 0, 0)
+                seerr_request_id, proposed_at, requested_at, approved_at
+            ) VALUES (7, ?, ?, 1, '[]', ?, ?, 0, 0, ?)
             """,
-            (tmdb_id, status, request_id),
+            (media_type, tmdb_id, status, request_id, approved_at),
         )
 
 
@@ -201,11 +203,24 @@ def request_list(statuses):
     )
 
 
+def available(*titles):
+    return respx.get(f"{URL}/media").respond(
+        json={
+            "pageInfo": {"results": len(titles)},
+            "results": [
+                {"mediaType": media_type, "tmdbId": tmdb_id, "status": 5}
+                for media_type, tmdb_id in titles
+            ],
+        }
+    )
+
+
 @respx.mock
 def test_sync_records_the_admins_review(conn, seerr):
     # Seerr status: pending, approved, declined, failed, completed, deleted
     request_list({1: 1, 2: 2, 3: 3, 4: 4, 5: 5})
     not_found(6)
+    available()
     for request_id in range(1, 7):
         suggest(conn, 10 + request_id, request_id)
 
@@ -229,6 +244,7 @@ def test_sync_records_the_admins_review(conn, seerr):
 def test_listed_requests_are_not_looked_up(conn, seerr):
     request_list({1: 2})
     route = respx.get(f"{URL}/request/1")
+    available()
     suggest(conn, 10, 1)
 
     assert sync(conn, seerr, NOW) == {"approved": 1}
@@ -260,6 +276,18 @@ def test_failed_lookup_is_not_taken_for_deleted(conn, seerr):
 
 
 @respx.mock
+def test_a_seerr_error_records_nothing(conn, seerr):
+    # Otherwise the approval is recorded, and no digest ever reports it.
+    request_list({1: 2})
+    respx.get(f"{URL}/media").respond(500, json={"message": "boom"})
+    suggest(conn, 10, 1)
+
+    with pytest.raises(SeerrError, match="boom"):
+        sync(conn, seerr, NOW)
+    assert rows(conn)[0]["status"] == "requested"
+
+
+@respx.mock
 def test_deleted_requests_are_not_checked_again(conn, seerr):
     request_list({})
     not_found(1)
@@ -272,9 +300,101 @@ def test_deleted_requests_are_not_checked_again(conn, seerr):
 
 
 @respx.mock
-def test_sync_only_checks_open_requests(conn, seerr):
-    route = respx.get(f"{URL}/request/1").respond(json={"status": 3})
-    suggest(conn, 10, 1, status="approved")
+def test_settled_picks_are_not_checked(conn, seerr):
+    for request_id, status in enumerate(["declined", "deleted", "available"]):
+        suggest(conn, 10 + request_id, request_id, status=status)
 
     assert sync(conn, seerr, NOW) == {}
-    assert not route.called
+    assert not respx.calls
+
+
+@respx.mock
+def test_an_approved_pick_becomes_available(conn, seerr):
+    request_list({1: 2, 2: 2, 3: 2})
+    media = available(("movie", 10), ("tv", 11))
+    suggest(conn, 10, 1, status="approved", approved_at=5)
+    suggest(conn, 11, 2, status="approved", media_type="tv")
+    suggest(conn, 12, 3, status="approved")
+
+    assert sync(conn, seerr, NOW) == {"available": 2}
+    assert media.calls.last.request.url.params["filter"] == "allavailable"
+    assert [
+        (
+            r["media_type"],
+            r["tmdb_id"],
+            r["status"],
+            r["approved_at"],
+            r["available_at"],
+        )
+        for r in rows(conn)
+    ] == [
+        ("movie", 10, "available", 5, NOW),
+        ("movie", 12, "approved", None, None),
+        ("tv", 11, "available", None, NOW),
+    ]
+
+
+@respx.mock
+def test_a_pick_approved_and_downloaded_since_the_last_run(conn, seerr):
+    request_list({1: 2})
+    available(("movie", 10))
+    suggest(conn, 10, 1)
+
+    assert sync(conn, seerr, NOW) == {"approved": 1, "available": 1}
+    (row,) = rows(conn)
+    assert (row["status"], row["approved_at"], row["available_at"]) == (
+        "available",
+        NOW,
+        NOW,
+    )
+
+
+@respx.mock
+def test_seerr_declining_an_approved_pick_is_recorded(conn, seerr):
+    # Seerr declines an approved request when its title leaves Radarr or Sonarr.
+    request_list({1: 3})
+    media = available(("movie", 10))
+    suggest(conn, 10, 1, status="approved", approved_at=5)
+
+    assert sync(conn, seerr, NOW) == {"declined": 1}
+    (row,) = rows(conn)
+    assert (row["status"], row["approved_at"], row["declined_at"]) == (
+        "declined",
+        5,
+        NOW,
+    )
+    assert not media.called
+
+
+@respx.mock
+def test_an_approved_pick_stays_approved_without_its_request(conn, seerr):
+    # Failed, completed, or gone, e.g. deleted along with the user who made it.
+    request_list({1: 4, 2: 5})
+    lookup = respx.get(url__regex=rf"{URL}/request/\d+")
+    available()
+    for request_id in (1, 2, 3):
+        suggest(conn, 10 + request_id, request_id, status="approved")
+
+    assert sync(conn, seerr, NOW) == {}
+    assert [r["status"] for r in rows(conn)] == ["approved"] * 3
+    assert not lookup.called
+
+
+@respx.mock
+def test_a_dry_run_counts_changes_without_recording_them(conn, seerr):
+    request_list({1: 2, 2: 3, 4: 3})
+    not_found(3)
+    available(("movie", 10))
+    suggest(conn, 10, 1)
+    suggest(conn, 11, 2)
+    suggest(conn, 12, 3)
+    suggest(conn, 13, 4, status="approved")
+    before = [tuple(r) for r in rows(conn)]
+
+    assert sync(conn, seerr, NOW, dry_run=True) == {
+        "approved": 1,
+        "available": 1,
+        "declined": 2,
+        "deleted": 1,
+    }
+    assert [tuple(r) for r in rows(conn)] == before

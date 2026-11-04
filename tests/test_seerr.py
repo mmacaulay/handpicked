@@ -113,6 +113,35 @@ def test_create_set_up_and_delete_a_user(seerr):
     assert delete.called
 
 
+def show(tmdb_id, status, **seasons):
+    return {
+        **media(tmdb_id, status, media_type="tv"),
+        "seasons": [
+            {"seasonNumber": int(n[1:]), "status": s} for n, s in seasons.items()
+        ],
+    }
+
+
+@respx.mock
+def test_available_counts_shows_with_all_of_season_1(seerr):
+    route = respx.get(f"{URL}/media").respond(
+        json=page(
+            [
+                media(1, status=5),
+                media(2, status=1, status4k=5),  # 4K copy only
+                show(3, 5, s1=5, s2=5),
+                show(4, 4, s0=4, s1=5, s2=4),  # latest season still coming
+                show(5, 4, s1=4, s2=1),  # season 1 still coming
+                show(6, 4, s1=1, s2=5),  # no season 1
+                show(1, 4),  # same id as a movie, no seasons listed
+            ]
+        )
+    )
+
+    assert seerr.available() == {("movie", 1), ("tv", 3), ("tv", 4)}
+    assert route.calls.last.request.url.params["filter"] == "allavailable"
+
+
 @respx.mock
 def test_owned_status_mapping(seerr):
     respx.get(f"{URL}/media").respond(

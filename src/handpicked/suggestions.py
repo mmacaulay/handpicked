@@ -107,20 +107,42 @@ def request(
     return results
 
 
-def sync(conn: sqlite3.Connection, seerr: Seerr, now: int) -> Counter[str]:
-    """Record the admin's approvals, declines, and deletions of open requests."""
+def sync(
+    conn: sqlite3.Connection, seerr: Seerr, now: int, dry_run: bool = False
+) -> Counter[str]:
+    """Record the admin's review of requested picks, and when approved ones
+    become available. A dry run counts the changes without recording them."""
     changes: Counter[str] = Counter()
     rows = conn.execute(
         """
-        SELECT id, seerr_request_id FROM suggestions
-        WHERE status = 'requested' AND seerr_request_id IS NOT NULL
+        SELECT id, status, seerr_request_id, media_type, tmdb_id FROM suggestions
+        WHERE status IN ('requested', 'approved') AND seerr_request_id IS NOT NULL
         """
     ).fetchall()
     if not rows:
         return changes
+
+    # Written only after every Seerr read, so a Seerr error records nothing
+    # rather than changes the digest never reports.
+    updates: list[tuple[int, str]] = []
+
+    def record(row: sqlite3.Row, status: str) -> None:
+        updates.append((row["id"], status))
+        changes[status] += 1
+
     listed = seerr.request_statuses()
+    approved = []
     for row in rows:
         request_id = row["seerr_request_id"]
+        if row["status"] == "approved":
+            # Only a decline undoes an approval, such as Seerr's own when the
+            # title leaves Radarr or Sonarr. A request can disappear while its
+            # title still arrives, e.g. deleted along with the user who made it.
+            if REVIEWED.get(listed.get(request_id)) == "declined":
+                record(row, "declined")
+            else:
+                approved.append(row)
+            continue
         if request_id in listed:
             seerr_status = listed[request_id]
         else:
@@ -130,17 +152,24 @@ def sync(conn: sqlite3.Connection, seerr: Seerr, now: int) -> Counter[str]:
             seerr_status = seerr.request_status(request_id)
         status = "deleted" if seerr_status is None else REVIEWED.get(seerr_status)
         if status is not None:
-            _record(conn, row["id"], status, now)
-            changes[status] += 1
+            record(row, status)
+        if status == "approved":
+            approved.append(row)
+
+    if approved:
+        available = seerr.available()
+        for row in approved:
+            if (row["media_type"], row["tmdb_id"]) in available:
+                record(row, "available")
+
+    if not dry_run:
+        with conn:
+            for row_id, status in updates:
+                conn.execute(
+                    f"UPDATE suggestions SET status = ?, {status}_at = ? WHERE id = ?",
+                    (status, now, row_id),
+                )
     return changes
-
-
-def _record(conn: sqlite3.Connection, row_id: int, status: str, now: int) -> None:
-    with conn:
-        conn.execute(
-            f"UPDATE suggestions SET status = ?, {status}_at = ? WHERE id = ?",
-            (status, now, row_id),
-        )
 
 
 def _score_parts(candidate: Candidate) -> str:

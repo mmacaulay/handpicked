@@ -12,7 +12,7 @@
 <p style="margin:0 0 16px;color:#b42318;">{{ r.stopped }}</p>
 {% endif %}
 {% if r.changes is not none %}
-<p style="margin:0 0 16px;{{ muted }}">Since the last run: {{ r.changes["approved"] }} approved, {{ r.changes["declined"] }} declined, {{ r.changes["deleted"] }} deleted</p>
+<p style="margin:0 0 16px;{{ muted }}">Since the last run: {{ r.changes["approved"] }} approved, {{ r.changes["declined"] }} declined, {{ r.changes["deleted"] }} deleted, {{ r.changes["available"] }} available</p>
 {% endif %}
 {% for e in r.entries %}
 <h2 style="font-size:17px;margin:24px 0 4px;padding-top:16px;border-top:1px solid #e5e5e2;">{{ e.result.user.username }}</h2>

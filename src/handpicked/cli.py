@@ -232,12 +232,12 @@ def _run_steps(
             f"Seerr user {suggestions.REQUEST_USER_NAME} not found;"
             " the first live run creates it"
         )
-    if not dry_run:
-        changes = report.changes = suggestions.sync(conn, seerr, now)
-        print(
-            f"Requests since last run: {changes['approved']} approved,"
-            f" {changes['declined']} declined, {changes['deleted']} deleted"
-        )
+    changes = report.changes = suggestions.sync(conn, seerr, now, dry_run)
+    print(
+        f"Requests since last run: {changes['approved']} approved,"
+        f" {changes['declined']} declined, {changes['deleted']} deleted,"
+        f" {changes['available']} available"
+    )
 
     stats = report.ingest = ingest(conn, tautulli)
     print(
