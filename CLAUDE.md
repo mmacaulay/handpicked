@@ -5,9 +5,10 @@
 Handpicked is a household-curator recommender for Plex: per-user suggestions from watch history, queued as pending requests in Seerr, with a digest for the admin. See:
 
 - `docs/PRODUCT.md` for the why, positioning, and parked or rejected ideas
-- `docs/V1.md` for the current spec, scope, and open questions
+- `docs/V2.md` for the current spec, scope, and open questions
+- `docs/V1.md` for what v1 built, and its technical decisions
 
-Read both before making design decisions. Stay within v1 scope unless asked; do not build parked or out-of-scope features.
+Read them before making design decisions. Stay within v2 scope unless asked; do not build parked or out-of-scope features.
 
 ## Stack
 
@@ -16,7 +17,7 @@ Read both before making design decisions. Stay within v1 scope unless asked; do 
 - Config in YAML, validated with pydantic; long-running process with APScheduler
 - See "Technical decisions" in `docs/V1.md` for the reasoning
 - Packaged as a single Docker container, targeting Unraid
-- Integrations: Tautulli, TMDB, Seerr (not Overseerr). Radarr/Sonarr are possible future integrations, not used in v1.
+- Integrations: Tautulli, TMDB, Seerr (not Overseerr), and Plex from v2. Radarr/Sonarr are possible future integrations, not used yet.
 
 ## Conventions
 
