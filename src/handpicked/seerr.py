@@ -8,6 +8,8 @@ import httpx
 
 # Seerr MediaStatus values: processing, partially available, available.
 OWNED_STATUSES = {3, 4, 5}
+PARTIALLY_AVAILABLE = 4
+AVAILABLE = 5
 
 # The Seerr Permission bit that lets a user request movies and series.
 REQUEST = 32
@@ -99,6 +101,22 @@ class Seerr:
             (media["mediaType"], media["tmdbId"])
             for media in self._paged("/media")
             if media["status"] in OWNED_STATUSES or media["status4k"] in OWNED_STATUSES
+        }
+
+    def available(self) -> set[Title]:
+        """Titles a member can start watching: available, or a partly
+        available show with all of season 1."""
+        return {
+            (media["mediaType"], media["tmdbId"])
+            for media in self._paged("/media", {"filter": "allavailable"})
+            if media["status"] == AVAILABLE
+            or (
+                media["status"] == PARTIALLY_AVAILABLE
+                and any(
+                    season["seasonNumber"] == 1 and season["status"] == AVAILABLE
+                    for season in media.get("seasons", [])
+                )
+            )
         }
 
     def requested(self) -> set[Title]:

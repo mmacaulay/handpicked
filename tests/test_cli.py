@@ -243,11 +243,42 @@ def test_dry_run_warns_and_requests_nothing(example_config, capsys, monkeypatch)
     out = capsys.readouterr().out
     assert "Seerr user Handpicked not found; the first live run creates it" in out
     assert not create.called
-    assert "Requests since last run" not in out
+    assert "Requests since last run: 0 approved" in out
     assert "requested in Seerr" not in out
     assert not post.called
     conn = db.connect(example_config.parent / "handpicked.db")
     assert conn.execute("SELECT COUNT(*) FROM suggestions").fetchone()[0] == 0
+
+
+@respx.mock
+def test_dry_run_reports_sync_without_recording_it(example_config, capsys, monkeypatch):
+    mock_services(tautulli_users=[(111, "matt")])
+    monkeypatch.setattr(cli, "recommend", lambda *args: [])
+    assert main(["users"]) == 0
+    conn = db.connect(example_config.parent / "handpicked.db")
+    with conn:
+        conn.execute(
+            """
+            INSERT INTO suggestions (
+                user_id, media_type, tmdb_id, score, seeds, status,
+                seerr_request_id, proposed_at, requested_at
+            ) VALUES (111, 'movie', 10, 1, '[]', 'requested', 41, 0, 0)
+            """
+        )
+    respx.get(f"{SEERR}/request").respond(
+        json={"pageInfo": {"results": 1}, "results": [{"id": 41, "status": 2}]}
+    )
+    respx.get(f"{SEERR}/media").respond(
+        json={
+            "pageInfo": {"results": 1},
+            "results": [{"mediaType": "movie", "tmdbId": 10, "status": 5}],
+        }
+    )
+
+    assert main(["run"]) == 0
+    assert "1 approved, 0 declined, 0 deleted, 1 available" in capsys.readouterr().out
+    row = conn.execute("SELECT status, approved_at, available_at FROM suggestions")
+    assert tuple(row.fetchone()) == ("requested", None, None)
 
 
 DIGEST = """

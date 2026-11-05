@@ -53,7 +53,7 @@ def report(**kwargs):
     second = pick(11, "A Show", "tv", None)
     defaults = dict(
         dry_run=False,
-        changes=Counter(approved=2, deleted=1),
+        changes=Counter(approved=2, deleted=1, available=1),
         ingest=IngestStats(new_events=5, resolved=2, unresolved=1),
         included=[user(1, "kid"), user(2, "adult")],
         excluded=[user(3, "guest")],
@@ -108,7 +108,7 @@ def test_text_shows_each_pick_with_its_seeds_and_outcome():
     text, _ = parts(render(report(), SETTINGS))
 
     assert "DRY RUN" not in text
-    assert "Since the last run: 2 approved, 0 declined, 1 deleted" in text
+    assert "Since the last run: 2 approved, 0 declined, 1 deleted, 1 available" in text
     assert "kid (2 seeds, 1 abandoned, 2 recent titles skipped (no TMDB id))" in text
     assert "  1. Tom & Jerry <Uncut> (2020, movie, PG, TMDB 7.8)" in text
     assert "     because you finished Seed One and Seed Two" in text
@@ -145,7 +145,7 @@ def test_html_shows_posters_and_tmdb_attribution():
 def test_dry_run_is_marked_everywhere():
     entries = [entry("kid", [pick(10, "Pick")])]
     message = render(
-        report(dry_run=True, changes=None, entries=entries),
+        report(dry_run=True, entries=entries),
         SETTINGS,
     )
     text, html = parts(message)
@@ -153,7 +153,8 @@ def test_dry_run_is_marked_everywhere():
     assert message["Subject"] == "[DRY RUN] Handpicked: 1 pick for 1 person"
     assert text.startswith("DRY RUN: nothing was requested in Seerr or recorded.")
     assert "DRY RUN: nothing was requested" in html
-    assert "Since the last run" not in text
+    # Dry runs still check Seerr, so they report what they found.
+    assert "Since the last run: 2 approved" in text
     assert "Requested in Seerr" not in text
 
 
@@ -176,7 +177,7 @@ def test_stopped_run_keeps_what_it_already_did():
     text, html = parts(render(stopped, SETTINGS))
 
     assert "The run stopped early:\nTautulli error: down" in text
-    assert "Since the last run: 2 approved, 0 declined, 1 deleted" in text
+    assert "Since the last run: 2 approved, 0 declined, 1 deleted, 1 available" in text
     assert "Watch history: 5 new events" in text
     assert "Since the last run: 2 approved" in html
 
