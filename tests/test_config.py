@@ -31,6 +31,7 @@ def test_defaults(tmp_path):
     assert config.dry_run is False
     assert config.picks_per_run == 3
     assert config.thresholds.completion_pct == 80
+    assert config.outcomes.tv_ignore_weeks == 8
 
 
 def test_missing_required_field(tmp_path):

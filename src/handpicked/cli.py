@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from handpicked import db, digest, serve, suggestions, users
+from handpicked import db, digest, outcomes, serve, suggestions, users
 from handpicked.config import Config, ConfigError, config_path, load_config
 from handpicked.digest import Entry, Report, because
 from handpicked.ingest import ingest
@@ -244,6 +244,11 @@ def _run_steps(
         f"Watch history: {stats.new_events} new events,"
         f" {stats.resolved} titles resolved,"
         f" {stats.unresolved} unresolved (retried next run)"
+    )
+    settled = outcomes.record(conn, config, now, dry_run)
+    print(
+        f"Outcomes since last run: {settled['watched']} watched,"
+        f" {settled['abandoned']} abandoned, {settled['ignored']} ignored"
     )
 
     household = users.discover(conn, tautulli)

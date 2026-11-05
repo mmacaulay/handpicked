@@ -85,6 +85,13 @@ class Thresholds(Model):
     tv_abandon_weeks: int = Field(4, ge=1)
 
 
+class Outcomes(Model):
+    movie_ignore_weeks: int = Field(4, ge=1)
+    movie_abandon_weeks: int = Field(2, ge=1)
+    tv_ignore_weeks: int = Field(8, ge=1)
+    tv_abandon_weeks: int = Field(4, ge=1)
+
+
 class Digest(Model):
     host: NonBlank
     port: int | None = None  # 465 for ssl, 587 for starttls, 25 for none
@@ -109,6 +116,7 @@ class Config(Model):
     schedule: str = "0 9 * * SUN"
     picks_per_run: int = Field(3, ge=1)
     thresholds: Thresholds = Field(default_factory=Thresholds)
+    outcomes: Outcomes = Field(default_factory=Outcomes)
     digest: Digest | None = None
 
     @field_validator("schedule")

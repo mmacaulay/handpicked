@@ -98,7 +98,7 @@ def analyze(viewings: list[Viewing], thresholds: Thresholds, now: int) -> Histor
 
     for (seed_type, tmdb_id), item in items.items():
         latest = item[-1]
-        finishes = _finishes(item, thresholds.completion_pct)
+        finishes = finish_times(item, thresholds.completion_pct)
         in_window = [t for t in finishes.values() if max(t) >= window_start]
         recent = [max(t) for t in in_window]
         rewatched = any(len(t) > 1 for t in in_window)
@@ -131,7 +131,7 @@ def analyze(viewings: list[Viewing], thresholds: Thresholds, now: int) -> Histor
     return history
 
 
-def _finishes(item: list[Viewing], completion_pct: int) -> dict[int, list[int]]:
+def finish_times(item: list[Viewing], completion_pct: int) -> dict[int, list[int]]:
     """Stop times of finished viewings per movie or episode, near repeats dropped."""
     finishes: dict[int, list[int]] = defaultdict(list)
     for viewing in item:
