@@ -2,28 +2,41 @@
 
 import sqlite3
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 
 from handpicked.config import Config
 from handpicked.seeds import DAY, Viewing, finish_times, load_viewings
-from handpicked.suggestions import write_statuses
+from handpicked.suggestions import Change, write_statuses
 
 WEEK = 7 * DAY
+OUTCOMES = ("watched", "abandoned", "ignored")
+
+
+@dataclass
+class Landed:
+    """How one member's picks are landing."""
+
+    username: str
+    available: list[Change]  # since the last run, without an outcome yet
+    outcomes: list[Change]  # since the last run
+    totals: Counter[str]  # every outcome recorded so far
+
+    @property
+    def hit_rate(self) -> float | None:
+        settled = sum(self.totals[o] for o in OUTCOMES)
+        return self.totals["watched"] / settled if settled else None
 
 
 def record(
     conn: sqlite3.Connection, config: Config, now: int, dry_run: bool = False
-) -> Counter[str]:
+) -> list[Change]:
     """Settle available picks from watch history, and recheck ignored ones.
-    A dry run counts the outcomes without recording them."""
-    changes: Counter[str] = Counter()
+    A dry run returns the outcomes without recording them."""
+    changes: list[Change] = []
     rows = conn.execute(
-        """
-        SELECT id, user_id, media_type, tmdb_id, status, requested_at, available_at
-        FROM suggestions WHERE status IN ('available', 'ignored')
-        """
+        "SELECT * FROM suggestions WHERE status IN ('available', 'ignored')"
     ).fetchall()
     titles: dict[int, dict[tuple[str, int], list[Viewing]]] = {}
-    updates = []
     for row in rows:
         user_id = row["user_id"]
         if user_id not in titles:
@@ -37,12 +50,44 @@ def record(
         ]
         outcome = _outcome(row, item, config, now)
         if outcome is not None and outcome != row["status"]:
-            updates.append((row["id"], outcome))
-            changes[outcome] += 1
+            changes.append(Change.of(row, outcome))
 
     if not dry_run:
-        write_statuses(conn, updates, now)
+        write_statuses(conn, changes, now)
     return changes
+
+
+def landed(conn: sqlite3.Connection, changes: list[Change]) -> list[Landed]:
+    """Each member with picks that became available or settled in `changes`,
+    or with outcomes recorded before, by username."""
+    totals: dict[int, Counter[str]] = defaultdict(Counter)
+    for row in conn.execute(
+        """
+        SELECT user_id, status, COUNT(*) AS n FROM suggestions
+        WHERE status IN ('watched', 'abandoned', 'ignored')
+        GROUP BY user_id, status
+        """
+    ):
+        totals[row["user_id"]][row["status"]] = row["n"]
+    settled = [c for c in changes if c.status in OUTCOMES]
+    # A pick that became available and settled in one run is shown settled.
+    done = {c.row_id for c in settled}
+    available = [c for c in changes if c.status == "available" and c.row_id not in done]
+    members = {c.user_id for c in available + settled} | totals.keys()
+    # Not users.discover: members who have since left still have outcomes.
+    names = conn.execute(
+        "SELECT user_id, username FROM users ORDER BY username COLLATE NOCASE"
+    ).fetchall()
+    return [
+        Landed(
+            username,
+            [c for c in available if c.user_id == user_id],
+            [c for c in settled if c.user_id == user_id],
+            totals[user_id],
+        )
+        for user_id, username in names
+        if user_id in members
+    ]
 
 
 def _by_title(viewings: list[Viewing]) -> dict[tuple[str, int], list[Viewing]]:

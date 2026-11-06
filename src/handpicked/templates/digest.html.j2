@@ -14,6 +14,18 @@
 {% if r.changes is not none %}
 <p style="margin:0 0 16px;{{ muted }}">Since the last run: {{ r.changes["approved"] }} approved, {{ r.changes["declined"] }} declined, {{ r.changes["deleted"] }} deleted, {{ r.changes["available"] }} available</p>
 {% endif %}
+{% if r.landed %}
+<h2 style="font-size:17px;margin:24px 0 4px;padding-top:16px;border-top:1px solid #e5e5e2;">How picks are landing</h2>
+{% for l in r.landed %}
+<p style="margin:12px 0 4px;"><strong>{{ l.username }}</strong>{% if l.hit_rate is not none %}<span style="font-size:13px;{{ muted }}"> &middot; {{ l.totals["watched"] }} watched, {{ l.totals["abandoned"] }} abandoned, {{ l.totals["ignored"] }} ignored &middot; {{ "%.0f" | format(100 * l.hit_rate) }}% hit rate</span>{% endif %}</p>
+{% for c in l.available %}
+<div style="font-size:14px;margin:0 0 2px 12px;">Available: {{ c.title }} <span style="{{ muted }}">({{ c.year or "?" }}, {{ "movie" if c.media_type == "movie" else "TV" }})</span></div>
+{% endfor %}
+{% for c in l.outcomes %}
+<div style="font-size:14px;margin:0 0 2px 12px;">{{ c.status | capitalize }}: {{ c.title }} <span style="{{ muted }}">({{ c.year or "?" }}, {{ "movie" if c.media_type == "movie" else "TV" }})</span>, picked {{ because(c.seeds) }}</div>
+{% endfor %}
+{% endfor %}
+{% endif %}
 {% for e in r.entries %}
 <h2 style="font-size:17px;margin:24px 0 4px;padding-top:16px;border-top:1px solid #e5e5e2;">{{ e.result.user.username }}</h2>
 <p style="margin:0 0 12px;font-size:13px;{{ muted }}">{{ e.result.history.seeds | length }} seeds, {{ e.result.history.abandoned | length }} abandoned{% if e.result.history.unresolved %}, {{ e.result.history.unresolved }} recent titles skipped (no TMDB id){% endif %}</p>
@@ -35,7 +47,7 @@
 <td valign="top">
 <div style="font-weight:600;">{{ pick.title.title }}</div>
 <div style="font-size:13px;{{ muted }}">{{ pick.title.year or "?" }} &middot; {{ "Movie" if pick.title.media_type == "movie" else "TV" }} &middot; {{ pick.title.certification or "unrated" }} &middot; TMDB {{ "%.1f" | format(pick.title.vote_average) }}</div>
-<div style="font-size:14px;margin-top:2px;">{{ because(pick.candidate) }}</div>
+<div style="font-size:14px;margin-top:2px;">{{ because(pick.candidate.seeds) }}</div>
 {% if e.requested %}
 {% set outcome = e.requested[loop.index0] %}
 {% if outcome.request_id %}
@@ -60,7 +72,7 @@ Watch history: {{ r.ingest.new_events }} new events, {{ r.ingest.resolved }} tit
 Age ratings: found for {{ r.rated }} of {{ r.checked }} titles checked ({{ "%.0f" | format(100 * r.rated / r.checked) }}%)
 {% endif %}
 </p>
-{% if r.entries %}
+{% if r.entries or r.landed %}
 <p style="margin:12px 0 0;font-size:12px;{{ muted }}">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
 {% endif %}
 </div>

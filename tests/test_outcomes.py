@@ -1,8 +1,15 @@
+from collections import Counter
+
 import pytest
 from test_pipeline import CONFIG, NOW
 
 from handpicked import db
-from handpicked.outcomes import WEEK, record
+from handpicked.outcomes import WEEK, landed, record
+from handpicked.suggestions import Change
+
+
+def counts(changes):
+    return Counter(c.status for c in changes)
 
 
 @pytest.fixture
@@ -16,17 +23,18 @@ def conn(tmp_path):
     conn.close()
 
 
-def pick(conn, tmdb_id, media_type="movie", status="available", available=0):
+def pick(conn, tmdb_id, media_type="movie", status="available", available=0, user_id=7):
     """A pick requested at 0, available `available` weeks before NOW."""
     with conn:
         conn.execute(
             """
             INSERT INTO suggestions (
-                user_id, media_type, tmdb_id, score, seeds, status,
+                user_id, media_type, tmdb_id, title, score, seeds, status,
                 proposed_at, requested_at, available_at, ignored_at
-            ) VALUES (7, ?, ?, 1, '[]', ?, 0, 0, ?, ?)
+            ) VALUES (?, ?, ?, 'Pick', 1, '[]', ?, 0, 0, ?, ?)
             """,
             (
+                user_id,
                 media_type,
                 tmdb_id,
                 status,
@@ -72,7 +80,7 @@ def test_a_finished_movie_is_watched(conn):
     pick(conn, 1, available=1)
     view(conn, 1, 0.5, percent=85)
 
-    assert record(conn, CONFIG, NOW) == {"watched": 1}
+    assert counts(record(conn, CONFIG, NOW)) == {"watched": 1}
     (row,) = conn.execute("SELECT * FROM suggestions").fetchall()
     assert (row["status"], row["watched_at"]) == ("watched", NOW)
 
@@ -86,7 +94,7 @@ def test_a_show_is_watched_at_the_minimum_finished_episodes(conn):
     view(conn, 2, 2, episode=1)  # a rewatch is one finished episode
     view(conn, 2, 2, episode=2, percent=50)
 
-    assert record(conn, CONFIG, NOW) == {"watched": 1}
+    assert counts(record(conn, CONFIG, NOW)) == {"watched": 1}
     assert outcomes(conn) == {("tv", 1): "watched", ("tv", 2): "available"}
 
 
@@ -112,8 +120,8 @@ def test_the_abandon_window_starts_once_the_pick_is_available(conn):
     pick(conn, 1, "tv", available=0)
     view(conn, 1, 10, percent=50, episode=1)
 
-    assert record(conn, CONFIG, NOW) == {}
-    assert record(conn, CONFIG, NOW + 4 * WEEK) == {"abandoned": 1}
+    assert counts(record(conn, CONFIG, NOW)) == {}
+    assert counts(record(conn, CONFIG, NOW + 4 * WEEK)) == {"abandoned": 1}
 
 
 @pytest.mark.parametrize(
@@ -138,7 +146,7 @@ def test_an_ignored_pick_started_later_is_settled(conn):
     view(conn, 2, 3, percent=10)  # started, then left
     view(conn, 3, 0, percent=10)  # still watching
 
-    assert record(conn, CONFIG, NOW) == {"watched": 1, "abandoned": 1}
+    assert counts(record(conn, CONFIG, NOW)) == {"watched": 1, "abandoned": 1}
     assert outcomes(conn) == {
         ("movie", 1): "watched",
         ("movie", 2): "abandoned",
@@ -154,7 +162,7 @@ def test_watching_before_the_run_noticed_it_counts(conn):
     pick(conn, 1, available=0)
     view(conn, 1, 0.5)
 
-    assert record(conn, CONFIG, NOW) == {"watched": 1}
+    assert counts(record(conn, CONFIG, NOW)) == {"watched": 1}
 
 
 def test_viewings_before_the_request_do_not_count(conn):
@@ -163,7 +171,7 @@ def test_viewings_before_the_request_do_not_count(conn):
         conn.execute("UPDATE suggestions SET requested_at = ?", (NOW - WEEK,))
     view(conn, 1, 2)
 
-    assert record(conn, CONFIG, NOW) == {"ignored": 1}
+    assert counts(record(conn, CONFIG, NOW)) == {"ignored": 1}
 
 
 def test_only_the_members_own_viewings_of_that_title_count(conn):
@@ -174,14 +182,14 @@ def test_only_the_members_own_viewings_of_that_title_count(conn):
         view(conn, 3, 1, episode=episode)
     view(conn, 2, 1)  # a movie with the show's TMDB id
 
-    assert record(conn, CONFIG, NOW) == {"ignored": 2}
+    assert counts(record(conn, CONFIG, NOW)) == {"ignored": 2}
 
 
 def test_settled_picks_are_not_checked_again(conn):
     for tmdb_id, status in enumerate(["approved", "watched", "abandoned"]):
         pick(conn, tmdb_id, status=status, available=10)
 
-    assert record(conn, CONFIG, NOW) == {}
+    assert counts(record(conn, CONFIG, NOW)) == {}
     assert set(outcomes(conn).values()) == {"approved", "watched", "abandoned"}
 
 
@@ -190,5 +198,46 @@ def test_a_dry_run_counts_outcomes_without_recording_them(conn):
     pick(conn, 2, available=10)
     view(conn, 1, 0)
 
-    assert record(conn, CONFIG, NOW, dry_run=True) == {"watched": 1, "ignored": 1}
+    assert counts(record(conn, CONFIG, NOW, dry_run=True)) == {
+        "watched": 1,
+        "ignored": 1,
+    }
     assert set(outcomes(conn).values()) == {"available"}
+
+
+def change(row_id, user_id, status):
+    return Change(row_id, user_id, "movie", row_id, "Pick", None, [], status)
+
+
+def test_landed_groups_this_runs_changes_and_totals_by_member(conn):
+    with conn:
+        conn.execute("INSERT INTO users (user_id, username) VALUES (9, 'Abby')")
+    for tmdb_id, status in enumerate(["watched", "watched", "abandoned", "ignored"]):
+        pick(conn, tmdb_id, status=status)
+    pick(conn, 10, status="watched", user_id=9)
+    changes = [
+        change(1, 7, "available"),
+        change(2, 7, "approved"),  # not shown
+        change(3, 8, "available"),
+        change(3, 8, "watched"),  # available and watched in the same run
+        change(4, 8, "ignored"),
+    ]
+
+    abby, user7, user8 = landed(conn, changes)
+
+    assert (abby.username, abby.available, abby.outcomes) == ("Abby", [], [])
+    assert abby.hit_rate == 1
+    assert user7.username == "user7"
+    assert user7.available == [changes[0]]
+    assert user7.outcomes == []
+    assert user7.totals == {"watched": 2, "abandoned": 1, "ignored": 1}
+    assert user7.hit_rate == 0.5
+    assert user8.available == []
+    assert user8.outcomes == [changes[3], changes[4]]
+    assert user8.hit_rate is None  # nothing recorded yet, e.g. a dry run
+
+
+def test_landed_is_empty_with_nothing_to_report(conn):
+    pick(conn, 1)
+
+    assert landed(conn, []) == []

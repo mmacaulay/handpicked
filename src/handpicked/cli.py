@@ -3,6 +3,7 @@ import fcntl
 import sqlite3
 import sys
 import time
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -13,7 +14,7 @@ from handpicked.digest import Entry, Report, because
 from handpicked.ingest import ingest
 from handpicked.pipeline import UserPicks, recommend
 from handpicked.seerr import Seerr, SeerrError
-from handpicked.suggestions import Requested
+from handpicked.suggestions import Change, Requested
 from handpicked.tautulli import Tautulli, TautulliError
 from handpicked.tmdb import Tmdb, TmdbCache
 
@@ -187,9 +188,15 @@ def _run(
     dry_run = args.dry_run or config.dry_run
     print(f"handpicked run (dry_run={dry_run})")
     report = Report(dry_run=dry_run)
+    changes: list[Change] = []
     unexpected = None
     try:
-        _run_steps(report, config, conn, tautulli, seerr)
+        try:
+            _run_steps(report, config, conn, tautulli, seerr, changes)
+        finally:
+            # Whether the run finished or stopped: the totals need only the
+            # database, and changes holds whatever the run got to.
+            report.landed = outcomes.landed(conn, changes)
     except TautulliError as e:
         report.stopped = f"Tautulli error: {e}"
     except SeerrError as e:
@@ -215,8 +222,10 @@ def _run_steps(
     conn: sqlite3.Connection,
     tautulli: Tautulli,
     seerr: Seerr,
+    changes: list[Change],
 ) -> None:
-    """Run the job, filling in the report. Sets report.stopped if it stops."""
+    """Run the job, filling in the report and `changes`. Sets report.stopped if
+    it stops."""
     dry_run = report.dry_run
     now = int(time.time())
 
@@ -232,11 +241,13 @@ def _run_steps(
             f"Seerr user {suggestions.REQUEST_USER_NAME} not found;"
             " the first live run creates it"
         )
-    changes = report.changes = suggestions.sync(conn, seerr, now, dry_run)
+    synced = suggestions.sync(conn, seerr, now, dry_run)
+    changes.extend(synced)
+    counts = report.changes = Counter(c.status for c in synced)
     print(
-        f"Requests since last run: {changes['approved']} approved,"
-        f" {changes['declined']} declined, {changes['deleted']} deleted,"
-        f" {changes['available']} available"
+        f"Requests since last run: {counts['approved']} approved,"
+        f" {counts['declined']} declined, {counts['deleted']} deleted,"
+        f" {counts['available']} available"
     )
 
     stats = report.ingest = ingest(conn, tautulli)
@@ -246,9 +257,11 @@ def _run_steps(
         f" {stats.unresolved} unresolved (retried next run)"
     )
     settled = outcomes.record(conn, config, now, dry_run)
+    changes.extend(settled)
+    counts = Counter(c.status for c in settled)
     print(
-        f"Outcomes since last run: {settled['watched']} watched,"
-        f" {settled['abandoned']} abandoned, {settled['ignored']} ignored"
+        f"Outcomes since last run: {counts['watched']} watched,"
+        f" {counts['abandoned']} abandoned, {counts['ignored']} ignored"
     )
 
     household = users.discover(conn, tautulli)
@@ -311,7 +324,7 @@ def _print_picks(result: UserPicks, requested: list[Requested] | None) -> None:
             f"  {i}. {title.title} ({title.year or '?'}, {kind},"
             f" {title.certification or 'unrated'}) score {candidate.score:.2f}"
         )
-        print(f"     {because(candidate)}")
+        print(f"     {because(candidate.seeds)}")
         if requested:
             outcome = requested[i - 1]
             print(

@@ -13,8 +13,9 @@ from jinja2 import Environment, PackageLoader, StrictUndefined
 
 from handpicked.config import Digest
 from handpicked.ingest import IngestStats
-from handpicked.picks import Candidate
+from handpicked.outcomes import Landed
 from handpicked.pipeline import UserPicks
+from handpicked.seeds import Seed
 from handpicked.suggestions import Requested
 from handpicked.users import User
 
@@ -41,6 +42,7 @@ class Report:
     included: list[User] = field(default_factory=list)
     excluded: list[User] = field(default_factory=list)
     entries: list[Entry] = field(default_factory=list)
+    landed: list[Landed] = field(default_factory=list)
 
     @property
     def pick_count(self) -> int:
@@ -55,11 +57,9 @@ class Report:
         return sum(e.result.picks.rated for e in self.entries if e.result.picks)
 
 
-def because(candidate: Candidate) -> str:
-    finished = sorted(
-        (s for s in candidate.seeds if s.weight > 0), key=lambda s: -s.weight
-    )
-    abandoned = [s for s in candidate.seeds if s.weight < 0]
+def because(seeds: list[Seed]) -> str:
+    finished = sorted((s for s in seeds if s.weight > 0), key=lambda s: -s.weight)
+    abandoned = [s for s in seeds if s.weight < 0]
     reason = f"because you finished {_titles([s.title for s in finished])}"
     if abandoned:
         reason += f", despite abandoning {_titles([s.title for s in abandoned])}"
