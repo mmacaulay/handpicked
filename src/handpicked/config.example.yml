@@ -44,6 +44,14 @@ thresholds:
   tv_min_finished_episodes: 3 # finished episodes before a show is a seed
   tv_abandon_weeks: 4         # weeks without returning before a show is abandoned
 
+# When a pick's outcome is settled, once it's available. Watched uses the
+# completion thresholds above.
+outcomes:
+  movie_ignore_weeks: 4       # weeks available without a start before ignored
+  movie_abandon_weeks: 2      # weeks without returning before abandoned
+  tv_ignore_weeks: 8
+  tv_abandon_weeks: 4
+
 # Users are not configured here. Run `handpicked users` to list them and
 # `handpicked users set <name> --include` to opt one in.
 

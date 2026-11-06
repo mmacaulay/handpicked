@@ -163,13 +163,20 @@ def sync(
                 record(row, "available")
 
     if not dry_run:
-        with conn:
-            for row_id, status in updates:
-                conn.execute(
-                    f"UPDATE suggestions SET status = ?, {status}_at = ? WHERE id = ?",
-                    (status, now, row_id),
-                )
+        write_statuses(conn, updates, now)
     return changes
+
+
+def write_statuses(
+    conn: sqlite3.Connection, updates: list[tuple[int, str]], now: int
+) -> None:
+    """Move each (row id, status) to its status, reached at `now`."""
+    with conn:
+        for row_id, status in updates:
+            conn.execute(
+                f"UPDATE suggestions SET status = ?, {status}_at = ? WHERE id = ?",
+                (status, now, row_id),
+            )
 
 
 def _score_parts(candidate: Candidate) -> str:
