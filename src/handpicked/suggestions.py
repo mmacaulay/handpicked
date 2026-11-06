@@ -3,10 +3,10 @@
 import json
 import secrets
 import sqlite3
-from collections import Counter
 from dataclasses import dataclass
 
 from handpicked.picks import Candidate, Pick
+from handpicked.seeds import Seed
 from handpicked.seerr import REQUEST, Seerr, SeerrError, SeerrUser
 from handpicked.users import User
 
@@ -25,6 +25,34 @@ class Requested:
     pick: Pick
     request_id: int | None
     error: str | None  # why Seerr refused it
+
+
+@dataclass(frozen=True)
+class Change:
+    """A suggestion moving to `status`."""
+
+    row_id: int
+    user_id: int
+    media_type: str
+    tmdb_id: int
+    title: str
+    year: int | None
+    seeds: list[Seed]  # the titles behind the pick, as stored
+    status: str
+
+    @classmethod
+    def of(cls, row: sqlite3.Row, status: str) -> Change:
+        seeds = [Seed(**part) for part in json.loads(row["seeds"]) if "title" in part]
+        return cls(
+            row["id"],
+            row["user_id"],
+            row["media_type"],
+            row["tmdb_id"],
+            row["title"],
+            row["year"],
+            seeds,
+            status,
+        )
 
 
 def find_request_user(seerr_users: list[SeerrUser]) -> SeerrUser | None:
@@ -88,14 +116,16 @@ def request(
             conn.execute(
                 """
                 INSERT INTO suggestions (
-                    user_id, media_type, tmdb_id, score, seeds, status,
-                    seerr_request_id, proposed_at, requested_at
-                ) VALUES (?, ?, ?, ?, ?, 'requested', ?, ?, ?)
+                    user_id, media_type, tmdb_id, title, year, score, seeds,
+                    status, seerr_request_id, proposed_at, requested_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'requested', ?, ?, ?)
                 """,
                 (
                     user.user_id,
                     candidate.media_type,
                     candidate.tmdb_id,
+                    pick.title.title,
+                    pick.title.year,
                     candidate.score,
                     _score_parts(candidate),
                     request_id,
@@ -109,26 +139,23 @@ def request(
 
 def sync(
     conn: sqlite3.Connection, seerr: Seerr, now: int, dry_run: bool = False
-) -> Counter[str]:
+) -> list[Change]:
     """Record the admin's review of requested picks, and when approved ones
-    become available. A dry run counts the changes without recording them."""
-    changes: Counter[str] = Counter()
+    become available. A dry run returns the changes without recording them."""
+    # Written only after every Seerr read, so a Seerr error records nothing
+    # rather than changes the digest never reports.
+    changes: list[Change] = []
     rows = conn.execute(
         """
-        SELECT id, status, seerr_request_id, media_type, tmdb_id FROM suggestions
+        SELECT * FROM suggestions
         WHERE status IN ('requested', 'approved') AND seerr_request_id IS NOT NULL
         """
     ).fetchall()
     if not rows:
         return changes
 
-    # Written only after every Seerr read, so a Seerr error records nothing
-    # rather than changes the digest never reports.
-    updates: list[tuple[int, str]] = []
-
     def record(row: sqlite3.Row, status: str) -> None:
-        updates.append((row["id"], status))
-        changes[status] += 1
+        changes.append(Change.of(row, status))
 
     listed = seerr.request_statuses()
     approved = []
@@ -163,19 +190,18 @@ def sync(
                 record(row, "available")
 
     if not dry_run:
-        write_statuses(conn, updates, now)
+        write_statuses(conn, changes, now)
     return changes
 
 
-def write_statuses(
-    conn: sqlite3.Connection, updates: list[tuple[int, str]], now: int
-) -> None:
-    """Move each (row id, status) to its status, reached at `now`."""
+def write_statuses(conn: sqlite3.Connection, changes: list[Change], now: int) -> None:
+    """Move each changed row to its status, reached at `now`."""
     with conn:
-        for row_id, status in updates:
+        for change in changes:
             conn.execute(
-                f"UPDATE suggestions SET status = ?, {status}_at = ? WHERE id = ?",
-                (status, now, row_id),
+                f"UPDATE suggestions SET status = ?, {change.status}_at = ?"
+                " WHERE id = ?",
+                (change.status, now, change.row_id),
             )
 
 

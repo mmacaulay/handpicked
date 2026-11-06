@@ -261,9 +261,9 @@ def test_dry_run_reports_sync_without_recording_it(example_config, capsys, monke
         conn.execute(
             """
             INSERT INTO suggestions (
-                user_id, media_type, tmdb_id, score, seeds, status,
+                user_id, media_type, tmdb_id, title, score, seeds, status,
                 seerr_request_id, proposed_at, requested_at
-            ) VALUES (111, 'movie', 10, 1, '[]', 'requested', 41, 0, 0)
+            ) VALUES (111, 'movie', 10, 'Pick', 1, '[]', 'requested', 41, 0, 0)
             """
         )
     respx.get(f"{SEERR}/request").respond(
@@ -280,6 +280,60 @@ def test_dry_run_reports_sync_without_recording_it(example_config, capsys, monke
     assert "1 approved, 0 declined, 0 deleted, 1 available" in capsys.readouterr().out
     row = conn.execute("SELECT status, approved_at, available_at FROM suggestions")
     assert tuple(row.fetchone()) == ("requested", None, None)
+
+
+@respx.mock
+def test_a_run_stopped_after_sync_still_names_available_picks(example_config, sent):
+    add_digest(example_config)
+    mock_services(tautulli_users=[(111, "matt")])
+    assert main(["users"]) == 0
+    conn = db.connect(example_config.parent / "handpicked.db")
+    with conn:
+        conn.execute(
+            """
+            INSERT INTO suggestions (
+                user_id, media_type, tmdb_id, title, year, score, seeds, status,
+                seerr_request_id, proposed_at, requested_at
+            ) VALUES (111, 'movie', 10, 'Pick', 2021, 1, '[]', 'approved', 41, 0, 0)
+            """
+        )
+    respx.get(f"{SEERR}/media").respond(
+        json={
+            "pageInfo": {"results": 1},
+            "results": [{"mediaType": "movie", "tmdbId": 10, "status": 5}],
+        }
+    )
+    respx.get(TAUTULLI, params={"cmd": "get_history"}).respond(500)
+
+    assert main(["run"]) == 1
+    text = text_part(sent[0])
+    assert "The run stopped early:\nTautulli error" in text
+    assert "matt\n  Available: Pick (2021, movie)" in text
+
+
+@respx.mock
+def test_a_run_stopped_by_sync_still_shows_totals(example_config, sent):
+    add_digest(example_config)
+    mock_services(tautulli_users=[(111, "matt")])
+    assert main(["users"]) == 0
+    conn = db.connect(example_config.parent / "handpicked.db")
+    with conn:
+        for tmdb_id, status in [(10, "watched"), (11, "requested")]:
+            conn.execute(
+                """
+                INSERT INTO suggestions (
+                    user_id, media_type, tmdb_id, title, score, seeds, status,
+                    seerr_request_id, proposed_at, requested_at
+                ) VALUES (111, 'movie', ?, 'Pick', 1, '[]', ?, 41, 0, 0)
+                """,
+                (tmdb_id, status),
+            )
+    respx.get(f"{SEERR}/request").respond(500, json={"message": "boom"})
+
+    assert main(["run"]) == 1
+    text = text_part(sent[0])
+    assert "Seerr error: /request: boom" in text
+    assert "matt: 1 watched, 0 abandoned, 0 ignored (100% hit rate)" in text
 
 
 DIGEST = """

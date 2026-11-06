@@ -101,10 +101,15 @@ def test_packaged_migrations_apply(conn):
     db.migrate(conn)
 
 
-def test_deleted_status_keeps_existing_suggestions(conn, migrations):
+def copy_migrations(migrations, last):
+    """Copy the packaged migrations up to `last`, a version like "0004"."""
     for entry in db.MIGRATIONS.iterdir():
-        if entry.name[:4] in {"0001", "0002", "0003", "0004"}:
+        if entry.name.endswith(".sql") and entry.name[:4] <= last:
             (migrations / entry.name).write_text(entry.read_text())
+
+
+def test_deleted_status_keeps_existing_suggestions(conn, migrations):
+    copy_migrations(migrations, "0004")
     db.migrate(conn, migrations)
     with conn:
         conn.execute("INSERT INTO users (user_id, username) VALUES (7, 'user7')")
@@ -117,8 +122,9 @@ def test_deleted_status_keeps_existing_suggestions(conn, migrations):
             """
         )
     before = dict(conn.execute("SELECT * FROM suggestions").fetchone())
+    copy_migrations(migrations, "0005")
 
-    db.migrate(conn)
+    db.migrate(conn, migrations)
 
     after = dict(conn.execute("SELECT * FROM suggestions").fetchone())
     assert after == {**before, "deleted_at": None}
@@ -158,3 +164,47 @@ def test_dropping_the_seerr_link_keeps_users_and_suggestions(conn, migrations):
         "picks_per_run": None,
     }
     assert conn.execute("SELECT seerr_request_id FROM suggestions").fetchone()[0] == 41
+
+
+def test_titles_are_filled_in_from_the_tmdb_cache(conn, migrations):
+    copy_migrations(migrations, "0006")
+    db.migrate(conn, migrations)
+    with conn:
+        conn.execute("INSERT INTO users (user_id, username) VALUES (7, 'user7')")
+        for tmdb_id, media_type in [(10, "movie"), (11, "tv"), (12, "movie")]:
+            conn.execute(
+                """
+                INSERT INTO suggestions (
+                    user_id, media_type, tmdb_id, score, seeds, status,
+                    seerr_request_id, proposed_at, requested_at
+                ) VALUES (7, ?, ?, 1.5, '[]', 'requested', 41, 1, 2)
+                """,
+                (media_type, tmdb_id),
+            )
+        conn.executemany(
+            "INSERT INTO tmdb_cache VALUES (?, ?, 0)",
+            [
+                (
+                    "/movie/10?append_to_response=release_dates",
+                    '{"title": "A Movie", "release_date": "2021-05-01"}',
+                ),
+                (
+                    "/tv/11?append_to_response=content_ratings",
+                    '{"name": "A Show", "first_air_date": ""}',
+                ),
+                ("/movie/10/recommendations?page=1", '{"results": []}'),
+            ],
+        )
+    before = [dict(r) for r in conn.execute("SELECT * FROM suggestions")]
+
+    db.migrate(conn)
+
+    after = [dict(r) for r in conn.execute("SELECT * FROM suggestions")]
+    assert [(r["title"], r["year"]) for r in after] == [
+        ("A Movie", 2021),
+        ("A Show", None),
+        ("TMDB 12", None),  # never cached
+    ]
+    for row in after:
+        del row["title"], row["year"]
+    assert after == before

@@ -1,4 +1,5 @@
 import json
+from collections import Counter
 
 import httpx
 import pytest
@@ -13,6 +14,7 @@ from handpicked.seeds import Seed
 from handpicked.seerr import Seerr, SeerrError, SeerrUser
 from handpicked.suggestions import (
     REQUEST_USER_EMAIL,
+    Change,
     create_request_user,
     find_request_user,
     request,
@@ -21,6 +23,10 @@ from handpicked.suggestions import (
 from handpicked.users import User
 
 URL = "http://seerr:5055/api/v1"
+
+
+def counts(changes):
+    return Counter(c.status for c in changes)
 
 
 def member(user_id=7):
@@ -118,6 +124,7 @@ def test_request_records_each_created_request(conn, seerr):
     assert (movie["user_id"], movie["media_type"], movie["tmdb_id"]) == (7, "movie", 10)
     assert (tv["media_type"], tv["tmdb_id"], tv["seerr_request_id"]) == ("tv", 11, 42)
     assert movie["status"] == "requested"
+    assert (movie["title"], movie["year"]) == ("title 10", 2020)
     assert movie["seerr_request_id"] == 41
     assert (movie["proposed_at"], movie["requested_at"]) == (NOW, NOW)
 
@@ -180,9 +187,9 @@ def suggest(
         conn.execute(
             """
             INSERT INTO suggestions (
-                user_id, media_type, tmdb_id, score, seeds, status,
+                user_id, media_type, tmdb_id, title, score, seeds, status,
                 seerr_request_id, proposed_at, requested_at, approved_at
-            ) VALUES (7, ?, ?, 1, '[]', ?, ?, 0, 0, ?)
+            ) VALUES (7, ?, ?, 'Pick', 1, '[]', ?, ?, 0, 0, ?)
             """,
             (media_type, tmdb_id, status, request_id, approved_at),
         )
@@ -224,7 +231,7 @@ def test_sync_records_the_admins_review(conn, seerr):
     for request_id in range(1, 7):
         suggest(conn, 10 + request_id, request_id)
 
-    changes = sync(conn, seerr, NOW)
+    changes = counts(sync(conn, seerr, NOW))
 
     assert changes == {"approved": 3, "declined": 1, "deleted": 1}
     assert [
@@ -247,7 +254,7 @@ def test_listed_requests_are_not_looked_up(conn, seerr):
     available()
     suggest(conn, 10, 1)
 
-    assert sync(conn, seerr, NOW) == {"approved": 1}
+    assert counts(sync(conn, seerr, NOW)) == {"approved": 1}
     assert not route.called
 
 
@@ -260,7 +267,7 @@ def test_request_missing_from_the_list_is_looked_up(conn, seerr):
     suggest(conn, 10, 1)
     suggest(conn, 11, 2)
 
-    assert sync(conn, seerr, NOW) == {"declined": 1}
+    assert counts(sync(conn, seerr, NOW)) == {"declined": 1}
     assert [r["status"] for r in rows(conn)] == ["requested", "declined"]
 
 
@@ -295,7 +302,7 @@ def test_deleted_requests_are_not_checked_again(conn, seerr):
     sync(conn, seerr, NOW)
     respx.reset()
 
-    assert sync(conn, seerr, NOW) == {}
+    assert counts(sync(conn, seerr, NOW)) == {}
     assert not respx.calls
 
 
@@ -304,7 +311,7 @@ def test_settled_picks_are_not_checked(conn, seerr):
     for request_id, status in enumerate(["declined", "deleted", "available"]):
         suggest(conn, 10 + request_id, request_id, status=status)
 
-    assert sync(conn, seerr, NOW) == {}
+    assert counts(sync(conn, seerr, NOW)) == {}
     assert not respx.calls
 
 
@@ -316,7 +323,7 @@ def test_an_approved_pick_becomes_available(conn, seerr):
     suggest(conn, 11, 2, status="approved", media_type="tv")
     suggest(conn, 12, 3, status="approved")
 
-    assert sync(conn, seerr, NOW) == {"available": 2}
+    assert counts(sync(conn, seerr, NOW)) == {"available": 2}
     assert media.calls.last.request.url.params["filter"] == "allavailable"
     assert [
         (
@@ -340,7 +347,7 @@ def test_a_pick_approved_and_downloaded_since_the_last_run(conn, seerr):
     available(("movie", 10))
     suggest(conn, 10, 1)
 
-    assert sync(conn, seerr, NOW) == {"approved": 1, "available": 1}
+    assert counts(sync(conn, seerr, NOW)) == {"approved": 1, "available": 1}
     (row,) = rows(conn)
     assert (row["status"], row["approved_at"], row["available_at"]) == (
         "available",
@@ -356,7 +363,7 @@ def test_seerr_declining_an_approved_pick_is_recorded(conn, seerr):
     media = available(("movie", 10))
     suggest(conn, 10, 1, status="approved", approved_at=5)
 
-    assert sync(conn, seerr, NOW) == {"declined": 1}
+    assert counts(sync(conn, seerr, NOW)) == {"declined": 1}
     (row,) = rows(conn)
     assert (row["status"], row["approved_at"], row["declined_at"]) == (
         "declined",
@@ -375,7 +382,7 @@ def test_an_approved_pick_stays_approved_without_its_request(conn, seerr):
     for request_id in (1, 2, 3):
         suggest(conn, 10 + request_id, request_id, status="approved")
 
-    assert sync(conn, seerr, NOW) == {}
+    assert counts(sync(conn, seerr, NOW)) == {}
     assert [r["status"] for r in rows(conn)] == ["approved"] * 3
     assert not lookup.called
 
@@ -391,10 +398,38 @@ def test_a_dry_run_counts_changes_without_recording_them(conn, seerr):
     suggest(conn, 13, 4, status="approved")
     before = [tuple(r) for r in rows(conn)]
 
-    assert sync(conn, seerr, NOW, dry_run=True) == {
+    assert counts(sync(conn, seerr, NOW, dry_run=True)) == {
         "approved": 1,
         "available": 1,
         "declined": 2,
         "deleted": 1,
     }
     assert [tuple(r) for r in rows(conn)] == before
+
+
+@respx.mock
+def test_changes_carry_the_pick_and_its_seeds(conn, seerr):
+    request_list({1: 2})
+    available()
+    suggest(conn, 10, 1)
+    seeds = [
+        {"media_type": "tv", "tmdb_id": 3, "title": "Seed", "weight": 0.8},
+        {"tmdb_rating": 7.1, "weight": 0.2},
+    ]
+    with conn:
+        conn.execute(
+            "UPDATE suggestions SET year = 2021, seeds = ?", (json.dumps(seeds),)
+        )
+
+    (change,) = sync(conn, seerr, NOW)
+
+    assert change == Change(
+        rows(conn)[0]["id"],
+        7,
+        "movie",
+        10,
+        "Pick",
+        2021,
+        [Seed("tv", 3, "Seed", 0.8)],  # without the rating prior
+        "approved",
+    )

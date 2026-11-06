@@ -89,8 +89,9 @@ def test_excludes_seerr_titles_past_suggestions_and_history(conn):
     watch(conn, 7, 1, 2)
     with conn:
         conn.execute(
-            "INSERT INTO suggestions (user_id, media_type, tmdb_id, score, seeds,"
-            " status, proposed_at) VALUES (7, 'movie', 13, 1, '[]', 'declined', 0)"
+            "INSERT INTO suggestions (user_id, media_type, tmdb_id, title, score,"
+            " seeds, status, proposed_at)"
+            " VALUES (7, 'movie', 13, 'Pick', 1, '[]', 'declined', 0)"
         )
     recs = [rec(i) for i in (2, 10, 11, 12, 13, 14)]
     seerr = FakeSeerr(

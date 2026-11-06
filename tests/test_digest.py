@@ -7,10 +7,11 @@ from handpicked import digest
 from handpicked.config import Digest
 from handpicked.digest import DigestError, Entry, Report, render, send
 from handpicked.ingest import IngestStats
+from handpicked.outcomes import Landed
 from handpicked.picks import Candidate, Pick, Picks
 from handpicked.pipeline import UserPicks
 from handpicked.seeds import History, Seed
-from handpicked.suggestions import Requested
+from handpicked.suggestions import Change, Requested
 from handpicked.tmdb import Title
 from handpicked.users import User
 
@@ -72,6 +73,22 @@ def report(**kwargs):
         ],
     )
     return Report(**{**defaults, **kwargs})
+
+
+def change(tmdb_id, title, status, media_type="movie", year=2021):
+    return Change(tmdb_id, 1, media_type, tmdb_id, title, year, list(SEEDS), status)
+
+
+def landed():
+    return [
+        Landed(
+            "kid",
+            [change(20, "Arrived <New>", "available", "tv", None)],
+            [change(21, "Loved It", "watched"), change(22, "Skipped It", "ignored")],
+            Counter(watched=3, abandoned=1, ignored=2),
+        ),
+        Landed("adult", [change(23, "Just In", "available")], [], Counter()),
+    ]
 
 
 def parts(message):
@@ -335,3 +352,46 @@ def test_connection_failure_raises_digest_error(monkeypatch):
 
     with pytest.raises(DigestError, match="timed out"):
         send(SETTINGS, render(report(), SETTINGS))
+
+
+def test_text_shows_how_picks_are_landing():
+    text, _ = parts(render(report(landed=landed()), SETTINGS))
+
+    section = text[text.index("How picks are landing") : text.index("kid (2 seeds")]
+    assert section == (
+        "How picks are landing\n"
+        "kid: 3 watched, 1 abandoned, 2 ignored (50% hit rate)\n"
+        "  Available: Arrived <New> (?, TV)\n"
+        "  Watched: Loved It (2021, movie),"
+        " picked because you finished Seed One and Seed Two\n"
+        "  Ignored: Skipped It (2021, movie),"
+        " picked because you finished Seed One and Seed Two\n"
+        "adult\n"
+        "  Available: Just In (2021, movie)\n"
+        "\n"
+    )
+
+
+def test_html_shows_how_picks_are_landing():
+    _, html = parts(render(report(landed=landed()), SETTINGS))
+
+    assert "How picks are landing" in html
+    assert "<strong>kid</strong>" in html
+    assert "3 watched, 1 abandoned, 2 ignored &middot; 50% hit rate" in html
+    assert "Available: Arrived &lt;New&gt;" in html
+    assert "Watched: Loved It" in html
+    assert "picked because you finished Seed One and Seed Two" in html
+    assert "<strong>adult</strong></p>" in html  # no totals before an outcome
+
+
+def test_no_landing_section_without_anything_to_report():
+    text, html = parts(render(report(), SETTINGS))
+
+    assert "How picks are landing" not in text
+    assert "How picks are landing" not in html
+
+
+def test_tmdb_attribution_shows_for_landed_picks_alone():
+    text, _ = parts(render(report(entries=[], landed=landed()), SETTINGS))
+
+    assert "uses the TMDB API" in text

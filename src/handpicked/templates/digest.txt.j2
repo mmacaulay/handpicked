@@ -8,6 +8,20 @@ The run stopped early:
 {% if r.changes is not none %}
 Since the last run: {{ r.changes["approved"] }} approved, {{ r.changes["declined"] }} declined, {{ r.changes["deleted"] }} deleted, {{ r.changes["available"] }} available
 {% endif %}
+{% if r.landed %}
+
+How picks are landing
+{% for l in r.landed %}
+{{ l.username }}{% if l.hit_rate is not none %}: {{ l.totals["watched"] }} watched, {{ l.totals["abandoned"] }} abandoned, {{ l.totals["ignored"] }} ignored ({{ "%.0f" | format(100 * l.hit_rate) }}% hit rate){% endif %}
+
+{% for c in l.available %}
+  Available: {{ c.title }} ({{ c.year or "?" }}, {{ "movie" if c.media_type == "movie" else "TV" }})
+{% endfor %}
+{% for c in l.outcomes %}
+  {{ c.status | capitalize }}: {{ c.title }} ({{ c.year or "?" }}, {{ "movie" if c.media_type == "movie" else "TV" }}), picked {{ because(c.seeds) }}
+{% endfor %}
+{% endfor %}
+{% endif %}
 {% for e in r.entries %}
 
 {{ e.result.user.username }} ({{ e.result.history.seeds | length }} seeds, {{ e.result.history.abandoned | length }} abandoned{% if e.result.history.unresolved %}, {{ e.result.history.unresolved }} recent titles skipped (no TMDB id){% endif %})
@@ -18,7 +32,7 @@ Since the last run: {{ r.changes["approved"] }} approved, {{ r.changes["declined
 {% endif %}
 {% for pick in (e.result.picks.picks if e.result.picks else []) %}
   {{ loop.index }}. {{ pick.title.title }} ({{ pick.title.year or "?" }}, {{ "movie" if pick.title.media_type == "movie" else "TV" }}, {{ pick.title.certification or "unrated" }}, TMDB {{ "%.1f" | format(pick.title.vote_average) }})
-     {{ because(pick.candidate) }}
+     {{ because(pick.candidate.seeds) }}
 {% if e.requested %}
 {% set outcome = e.requested[loop.index0] %}
 {% if outcome.request_id %}
@@ -41,7 +55,7 @@ Watch history: {{ r.ingest.new_events }} new events, {{ r.ingest.resolved }} tit
 {% if r.checked %}
 Age ratings: found for {{ r.rated }} of {{ r.checked }} titles checked ({{ "%.0f" | format(100 * r.rated / r.checked) }}%)
 {% endif %}
-{% if r.entries %}
+{% if r.entries or r.landed %}
 
 This product uses the TMDB API but is not endorsed or certified by TMDB.
 {% endif %}
