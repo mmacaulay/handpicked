@@ -425,6 +425,106 @@ def test_service_error_still_sends_the_digest(example_config, sent, capsys):
     assert "Seerr error: /user: boom" in text_part(message)
 
 
+PLEX = "http://plex:32400"
+
+
+@pytest.fixture
+def with_plex(monkeypatch):
+    monkeypatch.setenv("HANDPICKED_PLEX_URL", PLEX)
+    monkeypatch.setenv("HANDPICKED_PLEX_TOKEN", "plex-token")
+
+
+def plex_server(version="1.43.5.11079-b3b13e506", plex_pass=True):
+    respx.get(f"{PLEX}/").respond(
+        json={
+            "MediaContainer": {
+                "version": version,
+                "machineIdentifier": "abc",
+                "myPlexSubscription": plex_pass,
+            }
+        }
+    )
+
+
+@respx.mock
+def test_a_run_checks_plex_is_ready_to_deliver(example_config, with_plex, sent, capsys):
+    add_digest(example_config)
+    mock_services()
+    plex_server()
+
+    assert main(["run"]) == 0
+    out, err = capsys.readouterr()
+    assert "Plex Media Server 1.43.5.11079: ready to deliver picks" in out
+    assert "Plex" not in err
+    assert "not delivered" not in text_part(sent[0])
+
+
+@respx.mock
+def test_a_run_without_plex_configured_says_so(example_config, capsys):
+    mock_services()
+
+    assert main(["run"]) == 0
+    assert "Plex not configured, picks not delivered" in capsys.readouterr().out
+
+
+@respx.mock
+def test_a_server_without_plex_pass_skips_delivery(
+    example_config, with_plex, sent, capsys
+):
+    add_digest(example_config)
+    mock_services()
+    plex_server(plex_pass=False)
+
+    assert main(["run"]) == 0
+    problem = "the Plex admin account has no Plex Pass"
+    assert f"Picks not delivered to Plex: {problem}" in capsys.readouterr().err
+    assert f"Picks not delivered to Plex: {problem}" in text_part(sent[0])
+
+
+@respx.mock
+def test_an_unreachable_plex_skips_delivery_not_the_run(
+    example_config, with_plex, sent, capsys
+):
+    add_digest(example_config)
+    mock_services()
+    respx.get(f"{PLEX}/").mock(side_effect=httpx.ConnectError("refused"))
+
+    assert main(["run"]) == 0
+    assert f"Picks not delivered to Plex: Plex error: {PLEX}/: refused" in text_part(
+        sent[0]
+    )
+    out = capsys.readouterr().out
+    assert "Users: 0 included" in out
+    assert "plex-token" not in out
+
+
+@respx.mock
+def test_a_run_stopped_by_seerr_still_says_plex_is_not_ready(
+    example_config, with_plex, sent
+):
+    add_digest(example_config)
+    respx.get(f"{SEERR}/user").respond(500, json={"message": "boom"})
+    plex_server(version="1.40.0.1")
+
+    assert main(["run"]) == 1
+    text = text_part(sent[0])
+    assert "Seerr error: /user: boom" in text
+    assert "Picks not delivered to Plex: Plex Media Server 1.40.0.1 is older" in text
+
+
+@respx.mock
+def test_a_plex_reply_of_the_wrong_shape_skips_delivery_not_the_run(
+    example_config, with_plex, sent
+):
+    add_digest(example_config)
+    mock_services()
+    respx.get(f"{PLEX}/").respond(json={"foo": 1})
+
+    assert main(["run"]) == 0
+    expected = f"Picks not delivered to Plex: Plex error: {PLEX}/: unexpected"
+    assert expected in text_part(sent[0])
+
+
 @respx.mock
 def test_unexpected_error_sends_the_digest_then_raises(
     example_config, sent, monkeypatch

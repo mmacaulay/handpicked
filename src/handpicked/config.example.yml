@@ -18,6 +18,12 @@ services:
     api_key: your-seerr-api-key
   tmdb:
     token: your-tmdb-v4-read-token
+  # Optional. Without it, picks aren't delivered to Plex, and outcomes are
+  # still recorded. Needs Plex Media Server 1.43.2.10687 or newer, and Plex
+  # Pass on the admin account.
+  # plex:
+  #   url: http://plex:32400
+  #   token: your-plex-admin-token
 
 # Compute and report everything, write nothing to Seerr. Off by default: no
 # user gets picks until opted in, and every request waits for the admin's

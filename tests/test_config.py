@@ -24,6 +24,7 @@ def test_example_config_is_valid():
     config = load_config(EXAMPLE, environ={})
     assert config.dry_run is False
     assert config.digest is None
+    assert config.services.plex is None
 
 
 def test_defaults(tmp_path):
@@ -226,6 +227,32 @@ def test_a_partial_digest_names_what_it_still_needs(tmp_path):
     environ = ENVIRON | {"HANDPICKED_SMTP_PASSWORD": "p"}
 
     with pytest.raises(ConfigError, match="Missing settings: SMTP host, Digest"):
+        load_config(tmp_path / "config.yml", environ=environ)
+
+
+def test_plex_from_the_environment(tmp_path):
+    environ = ENVIRON | {
+        "HANDPICKED_PLEX_URL": "http://plex:32400",
+        "HANDPICKED_PLEX_TOKEN": "p",
+    }
+
+    plex = load_config(tmp_path / "config.yml", environ=environ).services.plex
+
+    assert (plex.url, plex.token) == ("http://plex:32400", "p")
+
+
+def test_an_empty_config_does_not_ask_for_plex(tmp_path):
+    with pytest.raises(ConfigError) as raised:
+        load_config(tmp_path / "config.yml", environ={})
+
+    assert str(raised.value).startswith("Missing settings: Tautulli URL,")
+    assert "Plex" not in str(raised.value)
+
+
+def test_a_partial_plex_names_what_it_still_needs(tmp_path):
+    environ = ENVIRON | {"HANDPICKED_PLEX_URL": "http://plex:32400"}
+
+    with pytest.raises(ConfigError, match="^Missing settings: Plex token\\."):
         load_config(tmp_path / "config.yml", environ=environ)
 
 

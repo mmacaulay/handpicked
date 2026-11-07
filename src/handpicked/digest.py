@@ -39,6 +39,7 @@ class Report:
     stopped: str | None = None  # why the run stopped early
     changes: Counter[str] | None = None  # None if the run stopped before syncing
     ingest: IngestStats | None = None
+    undelivered: str | None = None  # why picks weren't delivered to Plex
     included: list[User] = field(default_factory=list)
     excluded: list[User] = field(default_factory=list)
     entries: list[Entry] = field(default_factory=list)
