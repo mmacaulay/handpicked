@@ -25,6 +25,13 @@ How picks are landing
 {% endfor %}
 {% endfor %}
 {% endif %}
+{% if r.rows %}
+
+Plex rows
+{% for line in r.rows %}
+  {{ line }}
+{% endfor %}
+{% endif %}
 {% for e in r.entries %}
 
 {{ e.result.user.username }} ({{ e.result.history.seeds | length }} seeds, {{ e.result.history.abandoned | length }} abandoned{% if e.result.history.unresolved %}, {{ e.result.history.unresolved }} recent titles skipped (no TMDB id){% endif %})

@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from handpicked import db, digest, outcomes, serve, suggestions, users
+from handpicked import db, digest, outcomes, rows, serve, suggestions, users
 from handpicked.config import Config, ConfigError, config_path, load_config
 from handpicked.digest import Entry, Report, because
 from handpicked.ingest import ingest
@@ -283,6 +283,16 @@ def _run_steps(
     included = report.included = [u for u in household if u.include]
     excluded = report.excluded = [u for u in household if not u.include]
     print(f"Users: {_count(included, 'included')}, {_count(excluded, 'not included')}")
+
+    if plex is not None and report.undelivered is None:
+        names = users.known(conn)
+        arranged = rows.arrange(
+            plex, {u.user_id for u in included}, set(names), dry_run
+        )
+        report.rows = rows.describe(arranged, names, dry_run)
+        print("\nPlex rows:" if report.rows else "\nPlex rows: no changes")
+        for line in report.rows:
+            print(f"  {line}")
 
     tmdb = Tmdb(config.services.tmdb.token, TmdbCache(conn))
     results = recommend(conn, config, tmdb, seerr, included, now)

@@ -1,7 +1,7 @@
 import pytest
 
 from handpicked import db
-from handpicked.users import UserError, discover, update_settings
+from handpicked.users import UserError, discover, known, update_settings
 
 
 class FakeTautulli:
@@ -49,7 +49,7 @@ def test_users_gone_from_tautulli_are_not_returned(conn):
     household = discover(conn, FakeTautulli((111, "matt")))
 
     assert [u.username for u in household] == ["matt"]
-    assert conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 2
+    assert known(conn) == {111: "matt", 222: "sam"}
 
 
 def test_local_and_inactive_users_are_skipped(conn):

@@ -29,6 +29,12 @@
 {% endfor %}
 {% endfor %}
 {% endif %}
+{% if r.rows %}
+<h2 style="font-size:17px;margin:24px 0 4px;padding-top:16px;border-top:1px solid #e5e5e2;">Plex rows</h2>
+{% for line in r.rows %}
+<div style="font-size:14px;margin:0 0 2px;">{{ line }}</div>
+{% endfor %}
+{% endif %}
 {% for e in r.entries %}
 <h2 style="font-size:17px;margin:24px 0 4px;padding-top:16px;border-top:1px solid #e5e5e2;">{{ e.result.user.username }}</h2>
 <p style="margin:0 0 12px;font-size:13px;{{ muted }}">{{ e.result.history.seeds | length }} seeds, {{ e.result.history.abandoned | length }} abandoned{% if e.result.history.unresolved %}, {{ e.result.history.unresolved }} recent titles skipped (no TMDB id){% endif %}</p>

@@ -446,17 +446,64 @@ def plex_server(version="1.43.5.11079-b3b13e506", plex_pass=True):
     )
 
 
+def plex_members(shares="", tokens=""):
+    """plex.tv and the server's libraries, with no rows yet."""
+    respx.get("https://plex.tv/api/v2/user").respond(json={"id": 1})
+    respx.get("https://plex.tv/api/users").respond(
+        text=f"<MediaContainer>{shares}</MediaContainer>"
+    )
+    respx.get("https://plex.tv/api/home/users").respond(text="<MediaContainer/>")
+    respx.get("https://plex.tv/api/servers/abc/shared_servers").respond(
+        text=f"<MediaContainer>{tokens}</MediaContainer>"
+    )
+    respx.get(f"{PLEX}/library/sections").respond(
+        json={
+            "MediaContainer": {
+                "Directory": [{"key": "1", "type": "movie", "title": "Movies"}]
+            }
+        }
+    )
+    respx.get(f"{PLEX}/library/sections/1/collections").respond(
+        json={"MediaContainer": {}}
+    )
+    respx.get(f"{PLEX}/hubs/sections/1/manage").respond(json={"MediaContainer": {}})
+
+
 @respx.mock
 def test_a_run_checks_plex_is_ready_to_deliver(example_config, with_plex, sent, capsys):
     add_digest(example_config)
     mock_services()
     plex_server()
+    plex_members()
 
     assert main(["run"]) == 0
     out, err = capsys.readouterr()
     assert "Plex Media Server 1.43.5.11079: ready to deliver picks" in out
+    assert "Plex rows: no changes" in out
     assert "Plex" not in err
     assert "not delivered" not in text_part(sent[0])
+
+
+@respx.mock
+def test_a_dry_run_reports_plex_rows_it_would_make(
+    example_config, with_plex, sent, capsys
+):
+    add_digest(example_config)
+    mock_services(tautulli_users=[(2, "kid")])
+    assert main(["users"]) == 0
+    assert main(["users", "set", "kid", "--include"]) == 0
+    plex_server()
+    plex_members(
+        '<User id="2" filterMovies="" filterTelevision="">'
+        '<Server machineIdentifier="abc"/></User>',
+        '<SharedServer userID="2" accessToken="kid-token"/>',
+    )
+    writes = respx.route(method__in=["POST", "PUT", "DELETE"])
+
+    assert main(["run"]) == 0
+    assert "  Would make kid's row in Movies" in capsys.readouterr().out
+    assert "Would make kid's row in Movies" in text_part(sent[0])
+    assert not writes.called
 
 
 @respx.mock
