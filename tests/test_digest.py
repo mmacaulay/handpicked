@@ -187,6 +187,17 @@ def test_stopped_run_says_why():
     assert "Watch history" not in text
 
 
+def test_digest_says_why_picks_were_not_delivered():
+    message = render(
+        report(undelivered="the Plex admin account has no Plex Pass"), SETTINGS
+    )
+    text, html = parts(message)
+
+    expected = "Picks not delivered to Plex: the Plex admin account has no Plex Pass"
+    assert expected in text
+    assert "the Plex admin account has no Plex Pass" in html
+
+
 def test_stopped_run_keeps_what_it_already_did():
     stopped = report(
         stopped="Tautulli error: down", entries=[], included=[], excluded=[]

@@ -5,6 +5,9 @@ DRY RUN: nothing was requested in Seerr or recorded.
 The run stopped early:
 {{ r.stopped }}
 {% endif %}
+{% if r.undelivered %}
+Picks not delivered to Plex: {{ r.undelivered }}
+{% endif %}
 {% if r.changes is not none %}
 Since the last run: {{ r.changes["approved"] }} approved, {{ r.changes["declined"] }} declined, {{ r.changes["deleted"] }} deleted, {{ r.changes["available"] }} available
 {% endif %}

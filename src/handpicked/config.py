@@ -27,6 +27,8 @@ ENV_VARS = {
     "HANDPICKED_SEERR_URL": ("services", "seerr", "url"),
     "HANDPICKED_SEERR_API_KEY": ("services", "seerr", "api_key"),
     "HANDPICKED_TMDB_TOKEN": ("services", "tmdb", "token"),
+    "HANDPICKED_PLEX_URL": ("services", "plex", "url"),
+    "HANDPICKED_PLEX_TOKEN": ("services", "plex", "token"),
     "HANDPICKED_SCHEDULE": ("schedule",),
     "HANDPICKED_PICKS_PER_RUN": ("picks_per_run",),
     "HANDPICKED_SMTP_HOST": ("digest", "host"),
@@ -36,17 +38,21 @@ ENV_VARS = {
 }
 LIST_ENV_VARS = {"HANDPICKED_DIGEST_RECIPIENTS"}  # comma-separated
 
-# Named as in the Unraid template, for the error when one is missing. The
-# digest's are required only once any digest setting is given.
+# Named as in the Unraid template, for the error when one is missing. Plex's
+# and the digest's are required only once any of their settings is given.
 REQUIRED = {
     ("services", "tautulli", "url"): "Tautulli URL",
     ("services", "tautulli", "api_key"): "Tautulli API key",
     ("services", "seerr", "url"): "Seerr URL",
     ("services", "seerr", "api_key"): "Seerr API key",
     ("services", "tmdb", "token"): "TMDB read access token",
+    ("services", "plex", "url"): "Plex URL",
+    ("services", "plex", "token"): "Plex token",
     ("digest", "host"): "SMTP host",
     ("digest", "recipients"): "Digest recipients",
 }
+# Optional sections inside a required one.
+OPTIONAL = {("services", "plex")}
 
 NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
@@ -69,10 +75,16 @@ class Tmdb(Model):
     token: NonBlank
 
 
+class Plex(Model):
+    url: NonBlank
+    token: NonBlank
+
+
 class Services(Model):
     tautulli: Service
     seerr: Service
     tmdb: Tmdb
+    plex: Plex | None = None  # without it, picks aren't delivered
 
 
 class Thresholds(Model):
@@ -192,8 +204,17 @@ def _describe(error: ValidationError, path: Path) -> str:
     invalid = []
     for e in error.errors():
         loc = tuple(e["loc"])
-        # A missing section stands for every required setting in it.
-        labels = {label for keys, label in REQUIRED.items() if keys[: len(loc)] == loc}
+        # A missing section stands for every required setting in it, except
+        # in the optional sections inside it.
+        labels = {
+            label
+            for keys, label in REQUIRED.items()
+            if keys[: len(loc)] == loc
+            and not any(
+                len(loc) < len(section) and keys[: len(section)] == section
+                for section in OPTIONAL
+            )
+        }
         if labels and (e["type"] == "missing" or _is_blank(e["input"])):
             missing |= labels
         else:

@@ -13,6 +13,7 @@ from handpicked.config import Config, ConfigError, config_path, load_config
 from handpicked.digest import Entry, Report, because
 from handpicked.ingest import ingest
 from handpicked.pipeline import UserPicks, recommend
+from handpicked.plex import Plex, PlexError, delivery_problem
 from handpicked.seerr import Seerr, SeerrError
 from handpicked.suggestions import Change, Requested
 from handpicked.tautulli import Tautulli, TautulliError
@@ -46,13 +47,18 @@ def _command(
 ) -> int:
     tautulli = Tautulli(config.services.tautulli.url, config.services.tautulli.api_key)
     seerr = Seerr(config.services.seerr.url, config.services.seerr.api_key)
+    plex = (
+        Plex(config.services.plex.url, config.services.plex.token)
+        if config.services.plex
+        else None
+    )
     try:
         if args.command == "run":
             with _run_lock(path.parent) as locked:
                 if not locked:
                     print("A run is already in progress", file=sys.stderr)
                     return 1
-                return _run(args, config, conn, tautulli, seerr)
+                return _run(args, config, conn, tautulli, seerr, plex)
         if args.users_command == "set":
             changes = {k: getattr(args, k) for k in users.SETTINGS if hasattr(args, k)}
             if not changes:
@@ -184,6 +190,7 @@ def _run(
     conn: sqlite3.Connection,
     tautulli: Tautulli,
     seerr: Seerr,
+    plex: Plex | None,
 ) -> int:
     dry_run = args.dry_run or config.dry_run
     print(f"handpicked run (dry_run={dry_run})")
@@ -192,7 +199,7 @@ def _run(
     unexpected = None
     try:
         try:
-            _run_steps(report, config, conn, tautulli, seerr, changes)
+            _run_steps(report, config, conn, tautulli, seerr, plex, changes)
         finally:
             # Whether the run finished or stopped: the totals need only the
             # database, and changes holds whatever the run got to.
@@ -222,12 +229,20 @@ def _run_steps(
     conn: sqlite3.Connection,
     tautulli: Tautulli,
     seerr: Seerr,
+    plex: Plex | None,
     changes: list[Change],
 ) -> None:
     """Run the job, filling in the report and `changes`. Sets report.stopped if
     it stops."""
     dry_run = report.dry_run
     now = int(time.time())
+
+    # First, so the digest says if Plex isn't ready even when a later step
+    # stops the run.
+    if plex is None:
+        print("Plex not configured, picks not delivered")
+    else:
+        report.undelivered = _check_plex(plex)
 
     as_user = suggestions.find_request_user(seerr.users())
     if as_user is None and not dry_run:
@@ -284,6 +299,22 @@ def _run_steps(
             f"\nAge ratings: found for {report.rated} of {report.checked} titles"
             f" checked ({report.rated / report.checked:.0%})"
         )
+
+
+def _check_plex(plex: Plex) -> str | None:
+    """Why picks can't be delivered this run, or None if they can."""
+    # A Plex problem skips delivery, not the run.
+    try:
+        server = plex.server()
+    except PlexError as e:
+        problem = f"Plex error: {e}"
+    else:
+        problem = delivery_problem(server)
+    if problem:
+        print(f"Picks not delivered to Plex: {problem}", file=sys.stderr)
+    else:
+        print(f"Plex Media Server {server.version}: ready to deliver picks")
+    return problem
 
 
 def _send_digest(config: Config, report: Report) -> bool:
