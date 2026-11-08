@@ -5,6 +5,7 @@ import pytest
 import respx
 
 from handpicked.plex import (
+    Account,
     Item,
     Plex,
     PlexError,
@@ -57,10 +58,10 @@ def test_server_without_a_subscription(plex):
 
 
 @respx.mock
-def test_shares_read_each_members_filters(plex):
+def test_shares_read_each_members_filters_and_name(plex):
     route = respx.get("https://plex.tv/api/users").mock(
         return_value=xml(
-            '<User id="1" filterMovies="" filterTelevision="">'
+            '<User id="1" title="Alex Smith" filterMovies="" filterTelevision="">'
             '<Server machineIdentifier="abc"/></User>'
             '<User id="2" filterMovies="contentRating!%3DR"'
             ' filterTelevision="label!%3Dx"><Server machineIdentifier="abc"/></User>'
@@ -70,7 +71,7 @@ def test_shares_read_each_members_filters(plex):
     )
 
     assert plex.shares("abc") == [
-        Share(1, "", ""),
+        Share(1, "", "", "Alex Smith"),
         Share(2, "contentRating!%3DR", "label!%3Dx"),
     ]
     assert route.calls.last.request.headers["X-Plex-Token"] == TOKEN
@@ -293,10 +294,12 @@ MOVIES = Section("1", "movie", "Movies")
 
 
 @respx.mock
-def test_account_id_is_the_token_owners(plex):
-    route = respx.get("https://plex.tv/api/v2/user").respond(json={"id": 7})
+def test_account_is_the_token_owners(plex):
+    route = respx.get("https://plex.tv/api/v2/user").respond(
+        json={"id": 7, "title": "Sam Jones", "username": "sj"}
+    )
 
-    assert plex.account_id() == 7
+    assert plex.account() == Account(7, "Sam Jones")
     assert route.calls.last.request.headers["Accept"] == "application/json"
 
 
@@ -320,38 +323,42 @@ def test_sections_are_the_movie_and_tv_libraries(plex):
 @respx.mock
 def test_collections_can_be_found_by_label(plex):
     route = respx.get(f"{URL}/library/sections/1/collections").respond(
-        json={"MediaContainer": {"Metadata": [{"ratingKey": "9"}]}}
+        json={"MediaContainer": {"Metadata": [{"ratingKey": "9", "title": "Mine"}]}}
     )
 
-    assert plex.collections(MOVIES, "handpicked-2") == ["9"]
+    assert plex.collections(MOVIES, "handpicked-2") == {"9": "Mine"}
     assert route.calls.last.request.url.params["label"] == "handpicked-2"
-    assert plex.collections(MOVIES) == ["9"]
+    assert plex.collections(MOVIES) == {"9": "Mine"}
     assert "label" not in route.calls.last.request.url.params
 
 
 @respx.mock
-def test_create_collection_makes_it_empty_then_labels_it(plex):
+def test_create_collection_makes_it_with_a_title_of_its_own_then_labels_it(plex):
     create = respx.post(f"{URL}/library/collections").respond(
         json={"MediaContainer": {"Metadata": [{"ratingKey": "9"}]}}
     )
-    label = respx.put(f"{URL}/library/sections/2/all").respond(200)
+    edit = respx.put(f"{URL}/library/sections/2/all").respond(200)
 
-    assert (
-        plex.create_collection(Section("2", "tv", "TV"), "Picked for you", "x") == "9"
+    key = plex.create_collection(
+        Section("2", "tv", "TV"), "TV picked for Sam", "handpicked-7"
     )
-    params = create.calls.last.request.url.params
-    assert dict(params) == {
+
+    assert key == "9"
+    # Made with a title no other collection has, so it gets a tag of its own.
+    assert dict(create.calls.last.request.url.params) == {
         "type": "2",
-        "title": "Picked for you",
+        "title": "handpicked-7-2",
         "smart": "0",
         "sectionId": "2",
     }
-    assert dict(label.calls.last.request.url.params) == {
+    label, rename = (dict(call.request.url.params) for call in edit.calls)
+    assert label == {
         "type": "18",
         "id": "9",
-        "label[0].tag.tag": "x",
+        "label[0].tag.tag": "handpicked-7",
         "label.locked": "1",
     }
+    assert rename["title.value"] == "TV picked for Sam"
 
 
 @respx.mock
@@ -387,6 +394,20 @@ def test_a_home_row_name_too_short_raises_plex_error(plex):
 
     with pytest.raises(PlexError, match="unexpected response"):
         plex.home_collections(MOVIES)
+
+
+@respx.mock
+def test_a_collection_is_renamed_and_its_title_locked(plex):
+    route = respx.put(f"{URL}/library/sections/1/all").respond(200)
+
+    plex.rename_collection(MOVIES, "9", "Movies picked for Alex")
+
+    assert dict(route.calls.last.request.url.params) == {
+        "type": "18",
+        "id": "9",
+        "title.value": "Movies picked for Alex",
+        "title.locked": "1",
+    }
 
 
 @respx.mock

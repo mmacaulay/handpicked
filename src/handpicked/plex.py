@@ -42,11 +42,19 @@ class Server:
 
 @dataclass(frozen=True)
 class Share:
-    """A member's share filters, one per library type, as Plex stores them."""
+    """A member's share filters, one per library type, as Plex stores them,
+    and their name on plex.tv."""
 
     user_id: int
     movies: str
     television: str
+    title: str = ""  # a full account's full name, or a managed profile's name
+
+
+@dataclass(frozen=True)
+class Account:
+    user_id: int
+    title: str  # the Full name on the account, or the username without one
 
 
 @dataclass(frozen=True)
@@ -101,6 +109,7 @@ class Plex:
                     int(user.attrib["id"]),
                     user.get("filterMovies", ""),
                     user.get("filterTelevision", ""),
+                    user.get("title", ""),
                 )
                 for user in users
                 if any(
@@ -119,12 +128,13 @@ class Plex:
                 for user in users
             }
 
-    def account_id(self) -> int:
-        """The Plex account id of the token's owner, the server admin."""
+    def account(self) -> Account:
+        """The token's owner, the server admin."""
         where = "plex.tv/v2/user"
         response = self._get(where, f"{PLEX_TV}/v2/user", accept="application/json")
         with _parsing(where):
-            return int(response.json()["id"])
+            body = response.json()
+            return Account(int(body["id"]), body.get("title") or "")
 
     def member_tokens(self, machine_id: str) -> dict[int, str]:
         """Each member's token for this server. Keep them in memory only, and
@@ -166,21 +176,31 @@ class Plex:
                             )
         return items
 
-    def collections(self, section: Section, label: str | None = None) -> list[str]:
-        """The rating keys of the section's collections this token can see,
-        only those with `label` if given. Plex matches labels ignoring case."""
+    def collections(self, section: Section, label: str | None = None) -> dict[str, str]:
+        """The titles of the section's collections this token can see, by
+        rating key, only those with `label` if given. Plex matches labels
+        ignoring case."""
         path = f"/library/sections/{section.key}/collections"
         body = self._json(path, {"label": label} if label else None)
         with _parsing(self._url + path):
-            return [c["ratingKey"] for c in body["MediaContainer"].get("Metadata", [])]
+            return {
+                c["ratingKey"]: c["title"]
+                for c in body["MediaContainer"].get("Metadata", [])
+            }
 
     def create_collection(self, section: Section, title: str, label: str) -> str:
         """Make an empty, unpromoted collection with a label. Returns its
-        rating key."""
+        rating key.
+
+        Plex gives a collection the tag of the title it's made with, and
+        collections with one tag share their items, even after a rename. So
+        it's made with a title from its label and section, which no other
+        collection has, then renamed to `title`.
+        """
         path = "/library/collections"
         params = {
             "type": COLLECTION_TYPES[section.media_type],
-            "title": title,
+            "title": f"{label}-{section.key}",
             "smart": 0,
             "sectionId": section.key,
         }
@@ -200,7 +220,18 @@ class Plex:
             with suppress(PlexError):
                 self.delete_collection(key)
             raise
+        # If this fails, the next run finds it by label and renames it.
+        self.rename_collection(section, key, title)
         return key
+
+    def rename_collection(self, section: Section, key: str, title: str) -> None:
+        """Change the title shown. The collection keeps the tag Plex gave it
+        when it was made, and its items."""
+        self._send(
+            "PUT",
+            f"/library/sections/{section.key}/all",
+            {"type": 18, "id": key, "title.value": title, "title.locked": 1},
+        )
 
     def delete_collection(self, key: str) -> None:
         """Delete a collection, which also takes it off every Home."""

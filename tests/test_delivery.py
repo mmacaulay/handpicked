@@ -134,7 +134,8 @@ def test_a_pick_waits_while_its_members_row_isnt_on_home(conn):
     assert plex.writes == []
     assert delivery_times(conn) == {1: (None, None)}
     assert describe(result, {KID: "kid"}, dry_run=False) == [
-        "Not delivered yet: Pick 1 (2020), kid's row isn't on their Home"
+        "Not delivered yet: Pick 1 (2020), kid's row isn't on their Home,"
+        " or someone else can see it"
     ]
 
 
