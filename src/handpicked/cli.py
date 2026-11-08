@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from handpicked import db, digest, outcomes, rows, serve, suggestions, users
+from handpicked import db, delivery, digest, outcomes, rows, serve, suggestions, users
 from handpicked.config import Config, ConfigError, config_path, load_config
 from handpicked.digest import Entry, Report, because
 from handpicked.ingest import ingest
@@ -271,7 +271,7 @@ def _run_steps(
         f" {stats.resolved} titles resolved,"
         f" {stats.unresolved} unresolved (retried next run)"
     )
-    settled = outcomes.record(conn, config, now, dry_run)
+    settled = outcomes.record(conn, config, now, dry_run, delivering=plex is not None)
     changes.extend(settled)
     counts = Counter(c.status for c in settled)
     print(
@@ -286,10 +286,12 @@ def _run_steps(
 
     if plex is not None and report.undelivered is None:
         names = users.known(conn)
-        arranged = rows.arrange(
-            plex, {u.user_id for u in included}, set(names), dry_run
-        )
+        arranged = rows.arrange(plex, {u.user_id for u in included}, names, dry_run)
         report.rows = rows.describe(arranged, names, dry_run)
+        # After a rows error, which rows are on Home isn't known.
+        if arranged.error is None:
+            delivered = delivery.deliver(conn, plex, arranged, changes, now, dry_run)
+            report.rows += delivery.describe(delivered, names, dry_run)
         print("\nPlex rows:" if report.rows else "\nPlex rows: no changes")
         for line in report.rows:
             print(f"  {line}")

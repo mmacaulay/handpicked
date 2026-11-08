@@ -197,7 +197,8 @@ def test_titles_are_filled_in_from_the_tmdb_cache(conn, migrations):
         )
     before = [dict(r) for r in conn.execute("SELECT * FROM suggestions")]
 
-    db.migrate(conn)
+    copy_migrations(migrations, "0007")
+    db.migrate(conn, migrations)
 
     after = [dict(r) for r in conn.execute("SELECT * FROM suggestions")]
     assert [(r["title"], r["year"]) for r in after] == [

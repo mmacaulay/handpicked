@@ -28,10 +28,16 @@ class Landed:
 
 
 def record(
-    conn: sqlite3.Connection, config: Config, now: int, dry_run: bool = False
+    conn: sqlite3.Connection,
+    config: Config,
+    now: int,
+    dry_run: bool = False,
+    delivering: bool = False,
 ) -> list[Change]:
     """Settle available picks from watch history, and recheck ignored ones.
-    A dry run returns the outcomes without recording them."""
+    With `delivering` (Plex configured), a pick is only ignored once it's been
+    in the member's row for the ignore window. A dry run returns the outcomes
+    without recording them."""
     changes: list[Change] = []
     rows = conn.execute(
         "SELECT * FROM suggestions WHERE status IN ('available', 'ignored')"
@@ -48,7 +54,7 @@ def record(
             for v in titles[user_id].get((row["media_type"], row["tmdb_id"]), [])
             if v.stopped >= row["requested_at"]
         ]
-        outcome = _outcome(row, item, config, now)
+        outcome = _outcome(row, item, config, now, delivering)
         if outcome is not None and outcome != row["status"]:
             changes.append(Change.of(row, outcome))
 
@@ -99,14 +105,19 @@ def _by_title(viewings: list[Viewing]) -> dict[tuple[str, int], list[Viewing]]:
 
 
 def _outcome(
-    row: sqlite3.Row, item: list[Viewing], config: Config, now: int
+    row: sqlite3.Row, item: list[Viewing], config: Config, now: int, delivering: bool
 ) -> str | None:
     """The pick's outcome from its viewings, or None while it's unsettled."""
     movie = row["media_type"] == "movie"
     windows = config.outcomes
     if not item:
+        # Delivery skips ignored picks, so one still waiting to be delivered
+        # can't be ignored yet.
+        start = row["delivered_at"] or (None if delivering else row["available_at"])
         weeks = windows.movie_ignore_weeks if movie else windows.tv_ignore_weeks
-        return "ignored" if now - row["available_at"] >= weeks * WEEK else None
+        if start is None:
+            return None
+        return "ignored" if now - start >= weeks * WEEK else None
     thresholds = config.thresholds
     needed = 1 if movie else thresholds.tv_min_finished_episodes
     if len(finish_times(item, thresholds.completion_pct)) >= needed:
