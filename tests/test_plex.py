@@ -4,7 +4,16 @@ import httpx
 import pytest
 import respx
 
-from handpicked.plex import Item, Plex, PlexError, Server, Share, delivery_problem
+from handpicked.plex import (
+    Item,
+    Plex,
+    PlexError,
+    Promotion,
+    Section,
+    Server,
+    Share,
+    delivery_problem,
+)
 
 URL = "http://plex:32400"
 TOKEN = "admin-token"
@@ -51,13 +60,16 @@ def test_server_without_a_subscription(plex):
 def test_shares_read_each_members_filters(plex):
     route = respx.get("https://plex.tv/api/users").mock(
         return_value=xml(
-            '<User id="1" filterMovies="" filterTelevision=""><Server/></User>'
+            '<User id="1" filterMovies="" filterTelevision="">'
+            '<Server machineIdentifier="abc"/></User>'
             '<User id="2" filterMovies="contentRating!%3DR"'
-            ' filterTelevision="label!%3Dx"/>'
+            ' filterTelevision="label!%3Dx"><Server machineIdentifier="abc"/></User>'
+            # A friend with no access to this server
+            '<User id="3"><Server machineIdentifier="other"/></User>'
         )
     )
 
-    assert plex.shares() == [
+    assert plex.shares("abc") == [
         Share(1, "", ""),
         Share(2, "contentRating!%3DR", "label!%3Dx"),
     ]
@@ -111,10 +123,10 @@ def test_library_items_map_tmdb_ids_in_movie_and_tv_libraries(plex):
         json={
             "MediaContainer": {
                 "Directory": [
-                    {"key": "1", "type": "movie"},
-                    {"key": "2", "type": "show"},
-                    {"key": "3", "type": "artist"},
-                    {"key": "4", "type": "movie"},
+                    {"key": "1", "type": "movie", "title": "L1"},
+                    {"key": "2", "type": "show", "title": "L2"},
+                    {"key": "3", "type": "artist", "title": "L3"},
+                    {"key": "4", "type": "movie", "title": "L4"},
                 ]
             }
         }
@@ -149,7 +161,11 @@ def test_library_items_map_tmdb_ids_in_movie_and_tv_libraries(plex):
 @respx.mock
 def test_an_empty_library_has_no_items(plex):
     respx.get(f"{URL}/library/sections").respond(
-        json={"MediaContainer": {"Directory": [{"key": "1", "type": "movie"}]}}
+        json={
+            "MediaContainer": {
+                "Directory": [{"key": "1", "type": "movie", "title": "L1"}]
+            }
+        }
     )
     respx.get(f"{URL}/library/sections/1/all").respond(json={"MediaContainer": {}})
 
@@ -161,7 +177,7 @@ def test_a_refused_request_raises_without_the_token(plex):
     respx.get("https://plex.tv/api/users").respond(401)
 
     with pytest.raises(PlexError) as raised:
-        plex.shares()
+        plex.shares("abc")
 
     assert raised.value.status_code == 401
     assert str(raised.value) == (
@@ -207,11 +223,13 @@ def test_a_server_reply_of_the_wrong_shape_raises_plex_error(plex, body):
 
 @respx.mock
 def test_a_plex_tv_reply_of_the_wrong_shape_raises_plex_error(plex):
-    respx.get("https://plex.tv/api/users").mock(return_value=xml("<User/>"))
+    respx.get("https://plex.tv/api/users").mock(
+        return_value=xml('<User><Server machineIdentifier="abc"/></User>')
+    )
     respx.get("https://plex.tv/api/home/users").mock(return_value=xml('<User id="x"/>'))
 
     with pytest.raises(PlexError, match="^plex.tv/users: unexpected response$"):
-        plex.shares()
+        plex.shares("abc")
     with pytest.raises(PlexError, match="unexpected response"):
         plex.age_presets()
 
@@ -219,7 +237,11 @@ def test_a_plex_tv_reply_of_the_wrong_shape_raises_plex_error(plex):
 @respx.mock
 def test_a_library_reply_of_the_wrong_shape_raises_plex_error(plex):
     respx.get(f"{URL}/library/sections").respond(
-        json={"MediaContainer": {"Directory": [{"key": "1", "type": "movie"}]}}
+        json={
+            "MediaContainer": {
+                "Directory": [{"key": "1", "type": "movie", "title": "L1"}]
+            }
+        }
     )
     respx.get(f"{URL}/library/sections/1/all").respond(
         json={"MediaContainer": {"Metadata": [{"Guid": [{"id": "tmdb://1"}]}]}}
@@ -265,3 +287,177 @@ def test_delivery_needs_plex_pass():
     problem = delivery_problem(Server((1, 43, 5, 1), "abc", False))
 
     assert problem.startswith("the Plex admin account has no Plex Pass")
+
+
+MOVIES = Section("1", "movie", "Movies")
+
+
+@respx.mock
+def test_account_id_is_the_token_owners(plex):
+    route = respx.get("https://plex.tv/api/v2/user").respond(json={"id": 7})
+
+    assert plex.account_id() == 7
+    assert route.calls.last.request.headers["Accept"] == "application/json"
+
+
+@respx.mock
+def test_sections_are_the_movie_and_tv_libraries(plex):
+    respx.get(f"{URL}/library/sections").respond(
+        json={
+            "MediaContainer": {
+                "Directory": [
+                    {"key": "1", "type": "movie", "title": "Movies"},
+                    {"key": "2", "type": "show", "title": "TV"},
+                    {"key": "3", "type": "photo", "title": "Photos"},
+                ]
+            }
+        }
+    )
+
+    assert plex.sections() == [MOVIES, Section("2", "tv", "TV")]
+
+
+@respx.mock
+def test_collections_can_be_found_by_label(plex):
+    route = respx.get(f"{URL}/library/sections/1/collections").respond(
+        json={"MediaContainer": {"Metadata": [{"ratingKey": "9"}]}}
+    )
+
+    assert plex.collections(MOVIES, "handpicked-2") == ["9"]
+    assert route.calls.last.request.url.params["label"] == "handpicked-2"
+    assert plex.collections(MOVIES) == ["9"]
+    assert "label" not in route.calls.last.request.url.params
+
+
+@respx.mock
+def test_create_collection_makes_it_empty_then_labels_it(plex):
+    create = respx.post(f"{URL}/library/collections").respond(
+        json={"MediaContainer": {"Metadata": [{"ratingKey": "9"}]}}
+    )
+    label = respx.put(f"{URL}/library/sections/2/all").respond(200)
+
+    assert (
+        plex.create_collection(Section("2", "tv", "TV"), "Picked for you", "x") == "9"
+    )
+    params = create.calls.last.request.url.params
+    assert dict(params) == {
+        "type": "2",
+        "title": "Picked for you",
+        "smart": "0",
+        "sectionId": "2",
+    }
+    assert dict(label.calls.last.request.url.params) == {
+        "type": "18",
+        "id": "9",
+        "label[0].tag.tag": "x",
+        "label.locked": "1",
+    }
+
+
+@respx.mock
+def test_a_collection_that_cant_be_labelled_is_deleted(plex):
+    respx.post(f"{URL}/library/collections").respond(
+        json={"MediaContainer": {"Metadata": [{"ratingKey": "9"}]}}
+    )
+    respx.put(f"{URL}/library/sections/2/all").respond(500)
+    delete = respx.delete(f"{URL}/library/collections/9").respond(200)
+
+    with pytest.raises(PlexError, match="HTTP 500"):
+        plex.create_collection(Section("2", "tv", "TV"), "Picked for you", "x")
+    assert delete.called
+
+
+@respx.mock
+def test_a_failed_cleanup_keeps_the_label_error(plex):
+    respx.post(f"{URL}/library/collections").respond(
+        json={"MediaContainer": {"Metadata": [{"ratingKey": "9"}]}}
+    )
+    respx.put(f"{URL}/library/sections/2/all").respond(500)
+    respx.delete(f"{URL}/library/collections/9").respond(404)
+
+    with pytest.raises(PlexError, match="sections/2/all.*HTTP 500"):
+        plex.create_collection(Section("2", "tv", "TV"), "Picked for you", "x")
+
+
+@respx.mock
+def test_promotions_by_hub(plex):
+    respx.get(f"{URL}/hubs/sections/1/manage").respond(
+        json={
+            "MediaContainer": {
+                "Hub": [
+                    {
+                        "identifier": "custom.collection.1.9",
+                        "promotedToOwnHome": False,
+                        "promotedToSharedHome": True,
+                    },
+                    {"identifier": "movie.recentlyadded"},
+                ]
+            }
+        }
+    )
+
+    assert plex.promotions(MOVIES) == {
+        "custom.collection.1.9": Promotion(own_home=False, shared_home=True),
+        "movie.recentlyadded": Promotion(own_home=False, shared_home=False),
+    }
+
+
+@respx.mock
+def test_promote_never_reaches_recommended(plex):
+    route = respx.post(f"{URL}/hubs/sections/1/manage").respond(200)
+
+    plex.promote(MOVIES, "9", Promotion(own_home=False, shared_home=True))
+
+    assert dict(route.calls.last.request.url.params) == {
+        "metadataItemId": "9",
+        "promotedToRecommended": "0",
+        "promotedToOwnHome": "0",
+        "promotedToSharedHome": "1",
+    }
+
+
+@respx.mock
+def test_demote_removes_the_managed_row(plex):
+    route = respx.delete(f"{URL}/hubs/sections/1/manage/custom.collection.1.9")
+
+    plex.demote(MOVIES, "9")
+
+    assert route.called
+
+
+@respx.mock
+def test_home_rows_are_the_promoted_hubs_for_a_section(plex):
+    route = respx.get(f"{URL}/hubs/promoted").respond(
+        json={"MediaContainer": {"Hub": [{"hubIdentifier": "custom.collection.1.9"}]}}
+    )
+
+    assert plex.as_member("m").home_rows(MOVIES) == {"custom.collection.1.9"}
+    request = route.calls.last.request
+    assert request.url.params["contentDirectoryID"] == "1"
+    assert request.headers["X-Plex-Token"] == "m"
+
+
+@respx.mock
+def test_set_filters_sends_both_with_the_admin_token(plex):
+    route = respx.put("https://plex.tv/api/users/2").respond(200)
+
+    plex.set_filters(2, "contentRating!=ca%2F18%2B&label!=handpicked-3", "")
+
+    request = route.calls.last.request
+    assert dict(request.url.params) == {
+        "filterMovies": "contentRating!=ca%2F18%2B&label!=handpicked-3",
+        "filterTelevision": "",
+    }
+    assert request.headers["X-Plex-Token"] == TOKEN
+    assert TOKEN not in str(request.url)
+
+
+@respx.mock
+def test_a_refused_write_raises_plex_error(plex):
+    respx.put("https://plex.tv/api/users/2").respond(422)
+    respx.post(f"{URL}/hubs/sections/1/manage").respond(400)
+
+    with pytest.raises(PlexError, match="^plex.tv/users/2: request failed .HTTP 422.$"):
+        plex.set_filters(2, "", "")
+    with pytest.raises(PlexError, match="manage: request failed .HTTP 400.$"):
+        plex.promote(MOVIES, "9", Promotion(own_home=True, shared_home=False))

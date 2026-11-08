@@ -40,6 +40,7 @@ class Report:
     changes: Counter[str] | None = None  # None if the run stopped before syncing
     ingest: IngestStats | None = None
     undelivered: str | None = None  # why picks weren't delivered to Plex
+    rows: list[str] = field(default_factory=list)  # changes to Plex rows
     included: list[User] = field(default_factory=list)
     excluded: list[User] = field(default_factory=list)
     entries: list[Entry] = field(default_factory=list)

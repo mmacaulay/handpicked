@@ -57,6 +57,12 @@ def discover(conn: sqlite3.Connection, tautulli: Tautulli) -> list[User]:
     ]
 
 
+def known(conn: sqlite3.Connection) -> dict[int, str]:
+    """Every user ever discovered, including ones who have since left, with
+    their usernames."""
+    return dict(conn.execute("SELECT user_id, username FROM users").fetchall())
+
+
 def update_settings(
     conn: sqlite3.Connection, username: str, changes: Mapping[str, object]
 ) -> None:
