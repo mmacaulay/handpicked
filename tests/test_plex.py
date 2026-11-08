@@ -380,6 +380,52 @@ def test_a_failed_cleanup_keeps_the_label_error(plex):
 
 
 @respx.mock
+def test_a_home_row_name_too_short_raises_plex_error(plex):
+    respx.get(f"{URL}/hubs/promoted").respond(
+        json={"MediaContainer": {"Hub": [{"hubIdentifier": "custom.collection.1"}]}}
+    )
+
+    with pytest.raises(PlexError, match="unexpected response"):
+        plex.home_collections(MOVIES)
+
+
+@respx.mock
+def test_a_collection_is_deleted_by_key(plex):
+    route = respx.delete(f"{URL}/library/collections/9").respond(200)
+
+    plex.delete_collection("9")
+
+    assert route.called
+
+
+@respx.mock
+def test_collection_items_are_rating_keys(plex):
+    respx.get(f"{URL}/library/collections/9/children").respond(
+        json={"MediaContainer": {"Metadata": [{"ratingKey": "5"}, {"ratingKey": "6"}]}}
+    )
+    respx.get(f"{URL}/library/collections/8/children").respond(
+        json={"MediaContainer": {"size": 0}}
+    )
+
+    assert plex.collection_items("9") == {"5", "6"}
+    assert plex.collection_items("8") == set()
+
+
+@respx.mock
+def test_items_are_added_by_server_uri_and_removed_by_key(plex):
+    add = respx.put(f"{URL}/library/collections/9/items").respond(200)
+    remove = respx.delete(f"{URL}/library/collections/9/items/5").respond(200)
+
+    plex.add_to_collection("abc", "9", "5")
+    plex.remove_from_collection("9", "5")
+
+    assert add.calls.last.request.url.params["uri"] == (
+        "server://abc/com.plexapp.plugins.library/library/metadata/5"
+    )
+    assert remove.called
+
+
+@respx.mock
 def test_promotions_by_hub(plex):
     respx.get(f"{URL}/hubs/sections/1/manage").respond(
         json={
@@ -426,12 +472,14 @@ def test_demote_removes_the_managed_row(plex):
 
 
 @respx.mock
-def test_home_rows_are_the_promoted_hubs_for_a_section(plex):
+def test_home_collections_are_read_from_the_promoted_hubs(plex):
+    # As the household's server named them.
+    hubs = ["home.continue", "movie.recentlyadded.1", "custom.collection.1.9.9"]
     route = respx.get(f"{URL}/hubs/promoted").respond(
-        json={"MediaContainer": {"Hub": [{"hubIdentifier": "custom.collection.1.9"}]}}
+        json={"MediaContainer": {"Hub": [{"hubIdentifier": h} for h in hubs]}}
     )
 
-    assert plex.as_member("m").home_rows(MOVIES) == {"custom.collection.1.9"}
+    assert plex.as_member("m").home_collections(MOVIES) == {"9"}
     request = route.calls.last.request
     assert request.url.params["contentDirectoryID"] == "1"
     assert request.headers["X-Plex-Token"] == "m"

@@ -93,6 +93,8 @@ class FakePlex:
         self.late = set(late)
         self.applied = {u: (s.movies, s.television) for u, s in self.shares_.items()}
         self.collections_ = {}  # key: (section, label)
+        self.titles = {}  # key: title
+        self.made = 0
         self.promoted = {}  # hub id: Promotion
         self.writes = []
         self.viewer = None
@@ -125,15 +127,14 @@ class FakePlex:
             and (self.viewer is None or self._visible(section, lab))
         ]
 
-    def home_rows(self, section):
+    def home_collections(self, section):
         return {
-            hub
-            for hub, promotion in self.promoted.items()
-            if promotion.shared_home
-            and any(
-                hub == hub_id(s, key) and self._visible(s, lab)
-                for key, (s, lab) in self.collections_.items()
-            )
+            key
+            for key, (s, lab) in self.collections_.items()
+            if s == section
+            and (promotion := self.promoted.get(hub_id(s, key)))
+            and promotion.shared_home
+            and self._visible(s, lab)
         }
 
     def promotions(self, section):
@@ -157,8 +158,10 @@ class FakePlex:
 
     # Writes
     def create_collection(self, section, title, label):
-        key = str(100 + len(self.collections_))
+        self.made += 1
+        key = str(99 + self.made)
         self.collections_[key] = (section, label.capitalize())
+        self.titles[key] = title
         self.writes.append(("create", section.key, label))
         return key
 
@@ -184,7 +187,7 @@ def household(**kwargs):
 def test_each_included_member_gets_a_hidden_promoted_row_in_each_library():
     plex = household()
 
-    result = arrange(plex, {KID, ADULT}, set(), dry_run=False)
+    result = arrange(plex, {KID, ADULT}, {}, dry_run=False)
 
     assert [(r.user_id, r.section) for r in result.created] == [
         (KID, MOVIES),
@@ -204,12 +207,71 @@ def test_each_included_member_gets_a_hidden_promoted_row_in_each_library():
     assert result.waiting == [] and result.holding == {}
 
 
-def test_a_second_run_changes_nothing():
+def test_rows_on_home_are_reported_for_delivery():
+    plex = household(late={ADULT})
+    first = arrange(plex, {ADMIN, KID}, {}, dry_run=False)
+
+    # The kid's rows wait on the adult's late rule.
+    assert {(r.user_id, r.section) for r in first.on_home} == {
+        (ADMIN, MOVIES),
+        (ADMIN, TV),
+    }
+    assert len(first.found) == 4
+
+    plex.applied[ADULT] = (plex.shares_[ADULT].movies, plex.shares_[ADULT].television)
+    second = arrange(plex, {ADMIN, KID}, {}, dry_run=False)
+
+    assert {r.user_id for r in second.on_home} == {ADMIN, KID}
+    assert len(second.on_home) == 4
+
+    # A row taken off Home isn't on it.
+    plex.applied[ADULT] = ("", "")
+    plex.shares_[ADULT] = Share(ADULT, "", "")
+    plex.late.add(ADULT)
+    third = arrange(plex, {ADMIN, KID}, {}, dry_run=False)
+
+    assert {r.user_id for r in third.on_home} == {ADMIN}
+
+
+def test_each_members_rows_have_a_title_of_their_own():
     plex = household()
-    arrange(plex, {KID, ADULT}, set(), dry_run=False)
+
+    arrange(plex, {ADMIN, KID}, {ADMIN: "admin", KID: "kid"}, dry_run=False)
+
+    assert sorted(set(plex.titles.values())) == ["Picked for admin", "Picked for kid"]
+
+
+def test_a_row_made_before_a_username_change_keeps_its_title_and_picks():
+    plex = household()
+    arrange(plex, {KID}, {KID: "kid"}, dry_run=False)
     plex.writes.clear()
 
-    result = arrange(plex, {KID, ADULT}, set(), dry_run=False)
+    result = arrange(plex, {KID}, {KID: "kid2"}, dry_run=False)
+
+    assert plex.writes == [] and len(result.on_home) == 2
+
+
+def test_a_row_shown_only_on_someones_home_is_taken_off(monkeypatch):
+    plex = household()
+    arrange(plex, {KID}, {}, dry_run=False)
+    kid_rows = set(plex.collections_)
+    monkeypatch.setattr(
+        FakePlex,
+        "home_collections",
+        lambda self, section: kid_rows if self.viewer == ADULT else set(),
+    )
+
+    result = arrange(plex, {KID}, {}, dry_run=False)
+
+    assert [seen for _, seen in result.demoted] == [[ADULT], [ADULT]]
+
+
+def test_a_second_run_changes_nothing():
+    plex = household()
+    arrange(plex, {KID, ADULT}, {}, dry_run=False)
+    plex.writes.clear()
+
+    result = arrange(plex, {KID, ADULT}, {}, dry_run=False)
 
     assert plex.writes == []
     assert describe(result, {}, dry_run=False) == []
@@ -218,7 +280,7 @@ def test_a_second_run_changes_nothing():
 def test_a_row_waits_while_a_late_filter_still_shows_it():
     plex = household(late={ADULT})
 
-    first = arrange(plex, {KID}, set(), dry_run=False)
+    first = arrange(plex, {KID}, {}, dry_run=False)
 
     assert first.promoted == []
     assert [(r.user_id, seen) for r, seen in first.waiting] == [
@@ -230,7 +292,7 @@ def test_a_row_waits_while_a_late_filter_still_shows_it():
     )
 
     plex.applied[ADULT] = (plex.shares_[ADULT].movies, plex.shares_[ADULT].television)
-    second = arrange(plex, {KID}, set(), dry_run=False)
+    second = arrange(plex, {KID}, {}, dry_run=False)
 
     assert len(second.promoted) == 2
     assert second.rules == []
@@ -239,7 +301,7 @@ def test_a_row_waits_while_a_late_filter_still_shows_it():
 def test_the_admins_row_is_on_their_own_home_only_with_no_rules():
     plex = household()
 
-    result = arrange(plex, {ADMIN}, set(), dry_run=False)
+    result = arrange(plex, {ADMIN}, {}, dry_run=False)
 
     assert [r.user_id for r in result.created] == [ADMIN, ADMIN]
     assert set(plex.promoted.values()) == {OWN_HOME}
@@ -250,7 +312,7 @@ def test_the_admins_row_is_on_their_own_home_only_with_no_rules():
 def test_a_member_never_hides_their_own_row():
     plex = FakePlex([Share(KID, "label!=Handpicked-2", ""), Share(ADULT, "", "")])
 
-    arrange(plex, {KID}, set(), dry_run=False)
+    arrange(plex, {KID}, {}, dry_run=False)
 
     assert plex.shares_[KID] == Share(KID, "", "")
     assert plex.shares_[ADULT] == Share(
@@ -272,7 +334,7 @@ def test_a_member_never_hides_their_own_row():
     ],
 )
 def test_a_member_handpicked_cant_change_holds_back_every_row(plex, reason):
-    result = arrange(plex, {KID}, set(), dry_run=False)
+    result = arrange(plex, {KID}, {}, dry_run=False)
 
     assert list(result.holding) == [ADULT]
     assert reason in result.holding[ADULT]
@@ -288,7 +350,7 @@ def test_a_member_handpicked_cant_change_holds_back_every_row(plex, reason):
 def test_a_member_yet_to_accept_gets_rules_and_holds_back_every_row():
     plex = household(tokens={KID: "t2"})
 
-    result = arrange(plex, {KID}, set(), dry_run=False)
+    result = arrange(plex, {KID}, {}, dry_run=False)
 
     assert "haven't accepted the server invite" in result.holding[ADULT]
     assert plex.shares_[ADULT] == Share(
@@ -300,14 +362,14 @@ def test_a_member_yet_to_accept_gets_rules_and_holds_back_every_row():
 def test_a_held_member_gets_no_row():
     plex = household(presets={ADULT: "teen"})
 
-    result = arrange(plex, {KID, ADULT}, set(), dry_run=False)
+    result = arrange(plex, {KID, ADULT}, {}, dry_run=False)
 
     assert [r.user_id for r in result.created] == [KID, KID]
 
 
 def test_a_departed_members_row_stays_hidden_from_new_members():
     plex = household()
-    arrange(plex, {KID, ADULT}, set(), dry_run=False)
+    arrange(plex, {KID, ADULT}, {KID: "kid", ADULT: "adult"}, dry_run=False)
     # The kid leaves, and a new member joins whose rules apply late.
     del plex.shares_[KID], plex.tokens[KID]
     plex.shares_[NEW] = Share(NEW, "", "")
@@ -315,7 +377,7 @@ def test_a_departed_members_row_stays_hidden_from_new_members():
     plex.tokens[NEW] = "t4"
     plex.late.add(NEW)
 
-    result = arrange(plex, {ADULT}, {KID, ADULT}, dry_run=False)
+    result = arrange(plex, {ADULT}, {KID: "kid", ADULT: "adult"}, dry_run=False)
 
     assert labels(plex.shares_[NEW].movies) == {"handpicked-2", "handpicked-3"}
     assert sorted((r.user_id, seen) for r, seen in result.demoted) == [
@@ -328,13 +390,13 @@ def test_a_departed_members_row_stays_hidden_from_new_members():
 
 def test_a_promoted_row_someone_can_see_is_taken_off_home_screens():
     plex = household()
-    arrange(plex, {KID}, set(), dry_run=False)
+    arrange(plex, {KID}, {}, dry_run=False)
     # A filter edited by hand drops the rule.
     plex.applied[ADULT] = ("", "")
     plex.shares_[ADULT] = Share(ADULT, "", "")
     plex.late.add(ADULT)
 
-    result = arrange(plex, {KID}, set(), dry_run=False)
+    result = arrange(plex, {KID}, {}, dry_run=False)
 
     assert [(r.section, seen) for r, seen in result.demoted] == [
         (MOVIES, [ADULT]),
@@ -346,10 +408,10 @@ def test_a_promoted_row_someone_can_see_is_taken_off_home_screens():
 
 def test_an_excluded_members_existing_row_stays_hidden():
     plex = household()
-    arrange(plex, {KID, ADULT}, set(), dry_run=False)
+    arrange(plex, {KID, ADULT}, {}, dry_run=False)
     plex.writes.clear()
 
-    result = arrange(plex, {KID}, set(), dry_run=False)
+    result = arrange(plex, {KID}, {}, dry_run=False)
 
     assert result.rules == [] and result.created == []
     assert plex.writes == []
@@ -357,10 +419,10 @@ def test_an_excluded_members_existing_row_stays_hidden():
 
 def test_an_excluded_members_waiting_row_is_not_promoted():
     plex = household(late={ADULT})
-    arrange(plex, {KID}, set(), dry_run=False)
+    arrange(plex, {KID}, {KID: "kid"}, dry_run=False)
     plex.applied[ADULT] = (plex.shares_[ADULT].movies, plex.shares_[ADULT].television)
 
-    result = arrange(plex, set(), {KID}, dry_run=False)
+    result = arrange(plex, set(), {KID: "kid"}, dry_run=False)
 
     assert result.promoted == [] and result.waiting == []
     assert plex.promoted == {}
@@ -369,7 +431,7 @@ def test_an_excluded_members_waiting_row_is_not_promoted():
 def test_a_dry_run_reports_and_writes_nothing():
     plex = household()
 
-    result = arrange(plex, {KID}, set(), dry_run=True)
+    result = arrange(plex, {KID}, {}, dry_run=True)
 
     assert plex.writes == []
     assert [r.key for r in result.created] == [None, None]
@@ -389,7 +451,7 @@ def test_a_plex_error_keeps_what_was_done(monkeypatch):
 
     monkeypatch.setattr(plex, "set_filters", refused)
 
-    result = arrange(plex, {KID}, set(), dry_run=False)
+    result = arrange(plex, {KID}, {}, dry_run=False)
 
     assert len(result.created) == 2
     assert result.error == "Plex error: plex.tv/users/3: request failed (HTTP 422)"

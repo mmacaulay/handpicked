@@ -198,9 +198,32 @@ class Plex:
             # find it again. If this fails too, the label error is the one
             # to report.
             with suppress(PlexError):
-                self._send("DELETE", f"/library/collections/{key}")
+                self.delete_collection(key)
             raise
         return key
+
+    def delete_collection(self, key: str) -> None:
+        """Delete a collection, which also takes it off every Home."""
+        self._send("DELETE", f"/library/collections/{key}")
+
+    def collection_items(self, key: str) -> set[str]:
+        """The rating keys of the items in a collection."""
+        path = f"/library/collections/{key}/children"
+        body = self._json(path)
+        with _parsing(self._url + path):
+            return {
+                item["ratingKey"] for item in body["MediaContainer"].get("Metadata", [])
+            }
+
+    def add_to_collection(self, machine_id: str, key: str, rating_key: str) -> None:
+        uri = (
+            f"server://{machine_id}/com.plexapp.plugins.library"
+            f"/library/metadata/{rating_key}"
+        )
+        self._send("PUT", f"/library/collections/{key}/items", {"uri": uri})
+
+    def remove_from_collection(self, key: str, rating_key: str) -> None:
+        self._send("DELETE", f"/library/collections/{key}/items/{rating_key}")
 
     def promotions(self, section: Section) -> dict[str, Promotion]:
         """Where the section's managed rows are promoted, by hub identifier."""
@@ -235,13 +258,18 @@ class Plex:
             "DELETE", f"/hubs/sections/{section.key}/manage/{hub_id(section, key)}"
         )
 
-    def home_rows(self, section: Section) -> set[str]:
-        """The hub identifiers of the section's rows on this token's Home."""
+    def home_collections(self, section: Section) -> set[str]:
+        """The rating keys of the section's collections on this token's Home.
+        Plex names their rows `custom.collection.<section>.<key>.<key>` here,
+        unlike hub_id."""
         path = "/hubs/promoted"
         body = self._json(path, {"contentDirectoryID": section.key})
         with _parsing(self._url + path):
             return {
-                hub["hubIdentifier"] for hub in body["MediaContainer"].get("Hub", [])
+                parts[3]
+                for hub in body["MediaContainer"].get("Hub", [])
+                if (parts := hub["hubIdentifier"].split("."))[:2]
+                == ["custom", "collection"]
             }
 
     def set_filters(self, user_id: int, movies: str, television: str) -> None:
@@ -322,7 +350,7 @@ class Plex:
 
 
 def hub_id(section: Section, key: str) -> str:
-    """How Plex names a collection's row."""
+    """How Plex names a collection's row when managing promotion."""
     return f"custom.collection.{section.key}.{key}"
 
 
@@ -340,7 +368,7 @@ def _parsing(where: str) -> Iterator[None]:
     """Raise a reply of the wrong shape as a PlexError."""
     try:
         yield
-    except (KeyError, TypeError, ValueError, AttributeError) as e:
+    except (KeyError, IndexError, TypeError, ValueError, AttributeError) as e:
         raise PlexError(f"{where}: unexpected response") from e
 
 

@@ -139,6 +139,27 @@ def test_an_unstarted_pick_is_ignored_after_the_window(
     assert outcomes(conn) == {(media_type, 1): expected}
 
 
+@pytest.mark.parametrize(
+    ("delivered", "expected"), [(4, "ignored"), (3.9, "available")]
+)
+def test_when_delivering_the_window_counts_from_delivery(conn, delivered, expected):
+    pick(conn, 1, available=10)
+    with conn:
+        conn.execute(
+            "UPDATE suggestions SET delivered_at = ?", (NOW - delivered * WEEK,)
+        )
+
+    record(conn, CONFIG, NOW, delivering=True)
+
+    assert outcomes(conn) == {("movie", 1): expected}
+
+
+def test_an_undelivered_pick_isnt_ignored_while_delivering(conn):
+    pick(conn, 1, available=10)
+
+    assert record(conn, CONFIG, NOW, delivering=True) == []
+
+
 def test_an_ignored_pick_started_later_is_settled(conn):
     for tmdb_id in (1, 2, 3):
         pick(conn, tmdb_id, status="ignored", available=10)

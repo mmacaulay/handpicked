@@ -1,7 +1,7 @@
-"""Give each member a private "Picked for you" row on their Plex Home.
+"""Give each member a private "Picked for <name>" row on their Plex Home.
 
-Each member's row is a collection with a label of their own in each movie and
-TV library, hidden from every other member by a `label!=` rule in their share
+Each member's row is a collection with a title and label of their own in each
+movie and TV library, hidden from every other member by a `label!=` rule in their share
 filter. A row is promoted to members' Homes only once no one else can see it.
 See open question 1 in docs/V2.md.
 """
@@ -12,7 +12,6 @@ from urllib.parse import unquote
 
 from handpicked.plex import Plex, PlexError, Promotion, Section, Share, hub_id
 
-ROW_TITLE = "Picked for you"
 LABEL_PREFIX = "handpicked-"
 OWN_HOME = Promotion(own_home=True, shared_home=False)
 SHARED_HOME = Promotion(own_home=False, shared_home=True)
@@ -26,6 +25,14 @@ _OURS = re.compile(rf"{LABEL_PREFIX}[0-9]+")
 
 def label(user_id: int) -> str:
     return f"{LABEL_PREFIX}{user_id}"
+
+
+def title(user_id: int, names: dict[int, str]) -> str:
+    """A row's title, which must be the member's own when it's made: Plex
+    gives collections made with one title one tag, so an item added to one is
+    in all of them, and renaming doesn't separate them. A row made before a
+    member changed their username keeps the old one."""
+    return f"Picked for {names.get(user_id, f'Plex user {user_id}')}"
 
 
 def unsupported(raw: str) -> str | None:
@@ -113,23 +120,28 @@ class Rows:
     waiting: list[tuple[Row, list[int]]] = field(default_factory=list)
     holding: dict[int, str] = field(default_factory=dict)  # member: why
     error: str | None = None
+    found: list[Row] = field(default_factory=list)  # every row that exists
+    # Rows on their member's Home after the run, or that would be in a dry run.
+    on_home: list[Row] = field(default_factory=list)
 
 
-def arrange(plex: Plex, include: set[int], known: set[int], dry_run: bool) -> Rows:
+def arrange(
+    plex: Plex, include: set[int], names: dict[int, str], dry_run: bool
+) -> Rows:
     """Make each included member's rows, hide them from everyone else, and
-    promote the ones no one else can see. `known` is every user Handpicked
+    promote the ones no one else can see. `names` has every user Handpicked
     has seen, so the row of a member who has left stays hidden. Stops at a
     Plex error, keeping what it got to: every step is safe to run again."""
     rows = Rows()
     try:
-        _arrange(plex, include, known, dry_run, rows)
+        _arrange(plex, include, names, dry_run, rows)
     except PlexError as e:
         rows.error = f"Plex error: {e}"
     return rows
 
 
 def _arrange(
-    plex: Plex, include: set[int], known: set[int], dry_run: bool, rows: Rows
+    plex: Plex, include: set[int], names: dict[int, str], dry_run: bool, rows: Rows
 ) -> None:
     admin = plex.account_id()
     machine_id = plex.server().machine_id
@@ -148,12 +160,13 @@ def _arrange(
                 "haven't accepted the server invite, so their view can't be checked"
             )
 
-    members_rows = [
-        Row(user_id, section, found[0])
-        for user_id in sorted(include | known | shares.keys() | {admin})
-        for section in sections
-        if (found := plex.collections(section, label(user_id)))
-    ]
+    members_rows = []
+    for user_id in sorted(include | names.keys() | shares.keys() | {admin}):
+        for section in sections:
+            found = plex.collections(section, label(user_id))
+            if not found:
+                continue
+            members_rows.append(Row(user_id, section, found[0]))
     have = {(r.user_id, r.section) for r in members_rows}
     for user_id in sorted(include):
         if (user_id not in shares and user_id != admin) or user_id in rows.holding:
@@ -163,10 +176,13 @@ def _arrange(
                 continue
             key = None
             if not dry_run:
-                key = plex.create_collection(section, ROW_TITLE, label(user_id))
+                key = plex.create_collection(
+                    section, title(user_id, names), label(user_id)
+                )
             row = Row(user_id, section, key)
             rows.created.append(row)
             members_rows.append(row)
+    rows.found = [r for r in members_rows if r.key]
 
     # The admin's row is only on their own Home, so it needs no rules.
     hidden = {label(r.user_id) for r in members_rows if r.user_id != admin}
@@ -190,15 +206,12 @@ def _arrange(
         promoted = plex.promotions(section)
         # What each member's Collections tab and Home show.
         shown = {
-            u: (set(view.collections(section)), view.home_rows(section))
+            u: set(view.collections(section)) | view.home_collections(section)
             for u, view in views.items()
         }
         for row in section_rows:
             seen_by = [
-                u
-                for u, (keys, hubs) in shown.items()
-                if u != row.user_id
-                and (row.key in keys or hub_id(section, row.key) in hubs)
+                u for u, keys in shown.items() if u != row.user_id and row.key in keys
             ]
             _promote(plex, row, admin, include, promoted, seen_by, dry_run, rows)
 
@@ -232,6 +245,8 @@ def _promote(
             if not dry_run:
                 plex.promote(row.section, row.key, OWN_HOME)
             rows.promoted.append(row)
+        if current is not None or admin in include:
+            rows.on_home.append(row)
         return
     if current is not None:
         # A member added since, or a filter edited by hand, can show a
@@ -240,6 +255,8 @@ def _promote(
             if not dry_run:
                 plex.demote(row.section, row.key)
             rows.demoted.append((row, seen_by))
+        else:
+            rows.on_home.append(row)
         return
     if row.user_id not in include:
         return
@@ -249,6 +266,7 @@ def _promote(
     if not dry_run:
         plex.promote(row.section, row.key, SHARED_HOME)
     rows.promoted.append(row)
+    rows.on_home.append(row)
 
 
 def describe(rows: Rows, names: dict[int, str], dry_run: bool) -> list[str]:
