@@ -76,8 +76,19 @@ class FakePlex:
         self.collections[key].discard(rating_key)
 
 
+class View:
+    """The server as the member sees it, with `hidden` items held back by
+    their rating limits."""
+
+    def __init__(self, hidden=()):
+        self.hidden = set(hidden)
+
+    def has_item(self, rating_key):
+        return rating_key not in self.hidden
+
+
 ROW = Row(KID, MOVIES, "100")
-ON_HOME = Rows(found=[ROW], on_home=[ROW])
+ON_HOME = Rows(found=[ROW], on_home=[ROW], views={KID: View()})
 
 
 def test_an_available_pick_goes_in_its_members_row(conn):
@@ -139,6 +150,52 @@ def test_a_pick_waits_while_its_members_row_isnt_on_home(conn):
     ]
 
 
+def test_a_pick_its_member_cant_see_is_held_back_and_tried_again(conn):
+    pick(conn, 1)
+    plex = FakePlex({1: [Item("1", "50", "ca/R")]}, {"100": set()})
+    view = View(hidden={"50"})
+    rows = Rows(found=[ROW], on_home=[ROW], views={KID: view})
+
+    first = deliver(conn, plex, rows, [], NOW, dry_run=False)
+
+    assert plex.writes == []
+    assert delivery_times(conn) == {1: (None, None)}
+    assert describe(first, {KID: "kid"}, dry_run=False) == [
+        "Hidden from kid in Plex: Pick 1 (2020), Plex rates it ca/R, tried again"
+        " next run"
+    ]
+
+    # The admin changes the limit, or Plex's rating.
+    view.hidden.clear()
+    second = deliver(conn, plex, rows, [], NOW, dry_run=False)
+
+    assert [p.tmdb_id for p, _ in second.delivered] == [1]
+
+
+def test_a_dry_run_reports_a_hidden_pick_the_same_way(conn):
+    pick(conn, 1)
+    plex = FakePlex({1: [Item("1", "50")]}, {"100": set()})
+    rows = Rows(found=[ROW], on_home=[ROW], views={KID: View(hidden={"50"})})
+
+    result = deliver(conn, plex, rows, [], NOW, dry_run=True)
+
+    assert describe(result, {KID: "kid"}, dry_run=True) == [
+        "Hidden from kid in Plex: Pick 1 (2020), Plex has no rating for it,"
+        " tried again next run"
+    ]
+
+
+def test_a_pick_waits_for_a_member_yet_to_accept_the_invite(conn):
+    pick(conn, 1)
+    plex = FakePlex({1: [Item("1", "50")]}, {"100": set()})
+
+    result = deliver(
+        conn, plex, Rows(found=[ROW], on_home=[ROW]), [], NOW, dry_run=False
+    )
+
+    assert plex.writes == [] and [p.tmdb_id for p in result.waiting] == [1]
+
+
 def test_a_title_in_two_libraries_goes_in_the_first_with_a_row_on_home(conn):
     pick(conn, 1)
     pick(conn, 2)
@@ -151,13 +208,30 @@ def test_a_title_in_two_libraries_goes_in_the_first_with_a_row_on_home(conn):
     deliver(
         conn,
         plex,
-        Rows(found=[ROW, row_4k], on_home=[ROW, row_4k]),
+        Rows(found=[ROW, row_4k], on_home=[ROW, row_4k], views={KID: View()}),
         [],
         NOW,
         dry_run=False,
     )
 
     assert plex.writes == [("add", "100", "50"), ("add", "300", "52")]
+
+
+def test_a_hidden_copy_gives_way_to_one_in_another_library_the_member_sees(conn):
+    pick(conn, 1)
+    row_4k = Row(KID, MOVIES_4K, "300")
+    plex = FakePlex(
+        {1: [Item("3", "51"), Item("1", "50")]}, {"100": set(), "300": set()}
+    )
+    rows = Rows(
+        found=[ROW, row_4k], on_home=[ROW, row_4k], views={KID: View(hidden={"51"})}
+    )
+
+    result = deliver(conn, plex, rows, [], NOW, dry_run=False)
+
+    assert plex.writes == [("add", "100", "50")]
+    assert [row for _, row in result.delivered] == [ROW] and result.hidden == []
+    assert conn.execute("SELECT plex_rating_key FROM suggestions").fetchone()[0] == "50"
 
 
 @pytest.mark.parametrize("status", ["watched", "abandoned", "ignored"])

@@ -61,6 +61,7 @@ class Account:
 class Item:
     section_id: str
     rating_key: str
+    content_rating: str | None = None  # as Plex rates it, such as ca/PG
 
 
 @dataclass(frozen=True)
@@ -172,9 +173,22 @@ class Plex:
                         scheme, _, tmdb_id = guid["id"].partition("://")
                         if scheme == "tmdb" and tmdb_id.isdigit():
                             items.setdefault((media_type, int(tmdb_id)), []).append(
-                                Item(key, entry["ratingKey"])
+                                Item(
+                                    key, entry["ratingKey"], entry.get("contentRating")
+                                )
                             )
         return items
+
+    def has_item(self, rating_key: str) -> bool:
+        """Whether this token can see a library item. A member's rating
+        limits hide an item from them, and Plex answers 404 for it."""
+        try:
+            self._json(f"/library/metadata/{rating_key}")
+        except PlexError as e:
+            if e.status_code == 404:
+                return False
+            raise
+        return True
 
     def collections(self, section: Section, label: str | None = None) -> dict[str, str]:
         """The titles of the section's collections this token can see, by

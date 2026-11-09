@@ -18,6 +18,7 @@ class Delivery:
     delivered: list[tuple[Change, Row]] = field(default_factory=list)
     undelivered: list[Change] = field(default_factory=list)
     not_found: list[Change] = field(default_factory=list)
+    hidden: list[tuple[Change, Item]] = field(default_factory=list)  # from its member
     waiting: list[Change] = field(default_factory=list)  # no row it can go in
     error: str | None = None
 
@@ -96,13 +97,20 @@ def _deliver(
         if not found:
             delivery.not_found.append(pick)
             continue
-        # The first library it's in with the member's row on Home, such as
-        # the main library over a 4K one.
-        target = _first(found, on_home, pick.user_id)
-        if target is None:
+        targets = _targets(found, on_home, pick.user_id)
+        # A member yet to accept the server invite has no view to check with.
+        view = rows.views.get(pick.user_id)
+        if not targets or view is None:
             delivery.waiting.append(pick)
             continue
-        item, row = target
+        # The first library it's in with the member's row on Home, such as
+        # the main library over a 4K one, and that Plex shows them: delivered
+        # unseen, it would be ignored after the window.
+        visible = next((t for t in targets if view.has_item(t[0].rating_key)), None)
+        if visible is None:
+            delivery.hidden.append((pick, targets[0][0]))
+            continue
+        item, row = visible
         if not dry_run and item.rating_key not in items_in(row):
             plex.add_to_collection(machine_id, row.key, item.rating_key)
         record(pick, delivered_at=now, plex_rating_key=item.rating_key)
@@ -122,13 +130,14 @@ def _title(pick: Change) -> Title:
     return (pick.media_type, pick.tmdb_id)
 
 
-def _first(
+def _targets(
     found: list[Item], on_home: dict[tuple[int, str], Row], user_id: int
-) -> tuple[Item, Row] | None:
-    for item in found:
-        if (row := on_home.get((user_id, item.section_id))) is not None:
-            return item, row
-    return None
+) -> list[tuple[Item, Row]]:
+    return [
+        (item, row)
+        for item in found
+        if (row := on_home.get((user_id, item.section_id))) is not None
+    ]
 
 
 def describe(delivery: Delivery, names: dict[int, str], dry_run: bool) -> list[str]:
@@ -144,6 +153,11 @@ def describe(delivery: Delivery, names: dict[int, str], dry_run: bool) -> list[s
     def title(pick: Change) -> str:
         return f"{pick.title} ({pick.year or '?'})"
 
+    def rating(item: Item) -> str:
+        if item.content_rating:
+            return f"Plex rates it {item.content_rating}"
+        return "Plex has no rating for it"
+
     lines = [
         f"{did('Added', 'add')} {title(p)} to {name(p.user_id)}'s row"
         f" in {row.section.title}"
@@ -156,6 +170,11 @@ def describe(delivery: Delivery, names: dict[int, str], dry_run: bool) -> list[s
     lines += [
         f"Not in Plex yet: {title(p)} for {name(p.user_id)}, tried again next run"
         for p in delivery.not_found
+    ]
+    lines += [
+        f"Hidden from {name(p.user_id)} in Plex: {title(p)},"
+        f" {rating(item)}, tried again next run"
+        for p, item in delivery.hidden
     ]
     lines += [
         f"Not delivered yet: {title(p)}, {name(p.user_id)}'s row isn't on their"

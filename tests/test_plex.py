@@ -143,7 +143,11 @@ def test_library_items_map_tmdb_ids_in_movie_and_tv_libraries(plex):
         }
     )
     respx.get(f"{URL}/library/sections/2/all").respond(
-        json={"MediaContainer": {"Metadata": [metadata("20", "tmdb://100")]}}
+        json={
+            "MediaContainer": {
+                "Metadata": [metadata("20", "tmdb://100") | {"contentRating": "ca/14+"}]
+            }
+        }
     )
     music = respx.get(f"{URL}/library/sections/3/all")
     respx.get(f"{URL}/library/sections/4/all").respond(
@@ -153,7 +157,7 @@ def test_library_items_map_tmdb_ids_in_movie_and_tv_libraries(plex):
     # Movie and TV ids overlap, so the media type is part of the key.
     assert plex.library_items() == {
         ("movie", 100): [Item("1", "10"), Item("4", "40")],
-        ("tv", 100): [Item("2", "20")],
+        ("tv", 100): [Item("2", "20", "ca/14+")],
     }
     assert movies.calls.last.request.url.params["includeGuids"] == "1"
     assert not music.called
@@ -394,6 +398,22 @@ def test_a_home_row_name_too_short_raises_plex_error(plex):
 
     with pytest.raises(PlexError, match="unexpected response"):
         plex.home_collections(MOVIES)
+
+
+@respx.mock
+def test_has_item_is_false_for_an_item_a_members_limits_hide(plex):
+    respx.get(f"{URL}/library/metadata/5").respond(
+        json={"MediaContainer": {"Metadata": [{"ratingKey": "5"}]}}
+    )
+    respx.get(f"{URL}/library/metadata/6").respond(404)
+    respx.get(f"{URL}/library/metadata/7").respond(500)
+
+    member = plex.as_member("m")
+
+    assert member.has_item("5") is True
+    assert member.has_item("6") is False
+    with pytest.raises(PlexError):
+        member.has_item("7")
 
 
 @respx.mock
