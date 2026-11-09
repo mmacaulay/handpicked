@@ -236,6 +236,8 @@ def test_rows_on_home_are_reported_for_delivery():
 
     assert {r.user_id for r in second.on_home} == {ADMIN, KID}
     assert len(second.on_home) == 4
+    # Delivery checks each member's view, the admin's included.
+    assert set(second.views) == {ADMIN, KID, ADULT}
 
     # A row taken off Home isn't filled, and nor is the admin's, which stays
     # on their Home.

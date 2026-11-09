@@ -124,6 +124,9 @@ class Rows:
     # Rows delivery can fill: on their member's Home after the run, or that
     # would be in a dry run, and seen by no one else.
     on_home: list[Row] = field(default_factory=list)
+    # The server as each member sees it, the admin included. Holds their
+    # tokens: keep it in memory only.
+    views: dict[int, Plex] = field(default_factory=dict)
 
 
 def arrange(
@@ -215,6 +218,7 @@ def _arrange(
             rows.rules.append(user_id)
 
     views = {u: plex.as_member(t) for u, t in tokens.items() if u in shares}
+    rows.views = views | {admin: plex}
     for section in sections:
         section_rows = [r for r in members_rows if r.section == section and r.key]
         if not section_rows:
