@@ -1,6 +1,8 @@
+from dataclasses import replace
+
 import pytest
 
-from handpicked.plex import PlexError, Section, Server, Share, hub_id
+from handpicked.plex import Account, PlexError, Section, Server, Share, hub_id
 from handpicked.rows import (
     OWN_HOME,
     SHARED_HOME,
@@ -100,8 +102,8 @@ class FakePlex:
         self.viewer = None
 
     # Reads, as the admin unless self.viewer is a member.
-    def account_id(self):
-        return ADMIN
+    def account(self):
+        return Account(ADMIN, "Sam Admin")
 
     def server(self):
         return Server((1, 43, 5, 1), "abc", True)
@@ -119,13 +121,13 @@ class FakePlex:
         return [MOVIES, TV]
 
     def collections(self, section, label=None):
-        return [
-            key
+        return {
+            key: self.titles[key]
             for key, (s, lab) in self.collections_.items()
             if s == section
             and (label is None or lab.casefold() == label.casefold())
             and (self.viewer is None or self._visible(section, lab))
-        ]
+        }
 
     def home_collections(self, section):
         return {
@@ -165,9 +167,15 @@ class FakePlex:
         self.writes.append(("create", section.key, label))
         return key
 
+    def rename_collection(self, section, key, title):
+        self.writes.append(("rename", section.key, key, title))
+        self.titles[key] = title
+
     def set_filters(self, user_id, movies, television):
         self.writes.append(("filters", user_id, movies, television))
-        self.shares_[user_id] = Share(user_id, movies, television)
+        self.shares_[user_id] = replace(
+            self.shares_[user_id], movies=movies, television=television
+        )
         if user_id not in self.late:
             self.applied[user_id] = (movies, television)
 
@@ -181,7 +189,10 @@ class FakePlex:
 
 
 def household(**kwargs):
-    return FakePlex([Share(KID, KID_MOVIES, KID_TV), Share(ADULT, "", "")], **kwargs)
+    return FakePlex(
+        [Share(KID, KID_MOVIES, KID_TV, "Kid"), Share(ADULT, "", "", "Alex Adult")],
+        **kwargs,
+    )
 
 
 def test_each_included_member_gets_a_hidden_promoted_row_in_each_library():
@@ -196,10 +207,13 @@ def test_each_included_member_gets_a_hidden_promoted_row_in_each_library():
         (ADULT, TV),
     ]
     assert plex.shares_[KID] == Share(
-        KID, f"{KID_MOVIES}&label!=handpicked-3", f"{KID_TV}&label!=handpicked-3"
+        KID,
+        f"{KID_MOVIES}&label!=handpicked-3",
+        f"{KID_TV}&label!=handpicked-3",
+        "Kid",
     )
     assert plex.shares_[ADULT] == Share(
-        ADULT, "label!=handpicked-2", "label!=handpicked-2"
+        ADULT, "label!=handpicked-2", "label!=handpicked-2", "Alex Adult"
     )
     assert sorted(result.rules) == [KID, ADULT]
     assert len(result.promoted) == 4
@@ -211,11 +225,10 @@ def test_rows_on_home_are_reported_for_delivery():
     plex = household(late={ADULT})
     first = arrange(plex, {ADMIN, KID}, {}, dry_run=False)
 
-    # The kid's rows wait on the adult's late rule.
-    assert {(r.user_id, r.section) for r in first.on_home} == {
-        (ADMIN, MOVIES),
-        (ADMIN, TV),
-    }
+    # Every row waits on the adult's late rule, the admin's on their Home.
+    assert first.on_home == []
+    assert {r.user_id for r, _ in first.waiting} == {ADMIN, KID}
+    assert set(plex.promoted.values()) == {OWN_HOME}
     assert len(first.found) == 4
 
     plex.applied[ADULT] = (plex.shares_[ADULT].movies, plex.shares_[ADULT].television)
@@ -224,31 +237,111 @@ def test_rows_on_home_are_reported_for_delivery():
     assert {r.user_id for r in second.on_home} == {ADMIN, KID}
     assert len(second.on_home) == 4
 
-    # A row taken off Home isn't on it.
+    # A row taken off Home isn't filled, and nor is the admin's, which stays
+    # on their Home.
     plex.applied[ADULT] = ("", "")
-    plex.shares_[ADULT] = Share(ADULT, "", "")
+    plex.shares_[ADULT] = Share(ADULT, "", "", "Alex Adult")
     plex.late.add(ADULT)
     third = arrange(plex, {ADMIN, KID}, {}, dry_run=False)
 
-    assert {r.user_id for r in third.on_home} == {ADMIN}
+    assert third.on_home == []
+    assert {r.user_id for r, _ in third.demoted} == {KID}
+    assert {r.user_id for r, _ in third.waiting} == {ADMIN}
 
 
-def test_each_members_rows_have_a_title_of_their_own():
+def test_rows_are_titled_by_library_and_first_name():
     plex = household()
 
-    arrange(plex, {ADMIN, KID}, {ADMIN: "admin", KID: "kid"}, dry_run=False)
+    arrange(plex, {ADMIN, KID, ADULT}, {}, dry_run=False)
 
-    assert sorted(set(plex.titles.values())) == ["Picked for admin", "Picked for kid"]
+    assert sorted(plex.titles.values()) == [
+        "Movies picked for Alex",
+        "Movies picked for Kid",
+        "Movies picked for Sam",
+        "TV Shows picked for Alex",
+        "TV Shows picked for Kid",
+        "TV Shows picked for Sam",
+    ]
 
 
-def test_a_row_made_before_a_username_change_keeps_its_title_and_picks():
+def test_the_admins_row_isnt_filled_while_a_held_member_could_see_it():
+    plex = household(presets={ADULT: "teen"})
+
+    result = arrange(plex, {ADMIN}, {}, dry_run=False)
+
+    assert set(plex.promoted.values()) == {OWN_HOME}
+    assert result.on_home == []
+    assert [(r.user_id, seen) for r, seen in result.waiting] == [
+        (ADMIN, [ADULT]),
+        (ADMIN, [ADULT]),
+    ]
+
+
+def test_members_who_share_a_first_name_share_a_title():
+    plex = FakePlex([Share(KID, "", "", "Sam Kid")])
+
+    arrange(plex, {ADMIN, KID}, {}, dry_run=False)
+
+    assert sorted(set(plex.titles.values())) == [
+        "Movies picked for Sam",
+        "TV Shows picked for Sam",
+    ]
+
+
+def test_a_member_without_a_plex_name_is_named_by_username():
+    plex = FakePlex([Share(KID, "", "")])
+
+    arrange(plex, {KID}, {KID: "kid2"}, dry_run=False)
+
+    assert sorted(plex.titles.values()) == [
+        "Movies picked for kid2",
+        "TV Shows picked for kid2",
+    ]
+
+
+def test_a_row_is_renamed_when_its_members_name_changes():
     plex = household()
-    arrange(plex, {KID}, {KID: "kid"}, dry_run=False)
+    arrange(plex, {KID}, {}, dry_run=False)
+    keys = set(plex.collections_)
+    plex.writes.clear()
+    plex.shares_[KID] = replace(plex.shares_[KID], title="Robin Kid")
+
+    result = arrange(plex, {KID}, {KID: "kid"}, dry_run=False)
+
+    assert plex.writes == [
+        ("rename", "1", "100", "Movies picked for Robin"),
+        ("rename", "2", "101", "TV Shows picked for Robin"),
+    ]
+    assert set(plex.collections_) == keys and len(result.on_home) == 2
+    assert describe(result, {KID: "kid"}, dry_run=False) == [
+        'Renamed kid\'s row in Movies to "Movies picked for Robin"',
+        'Renamed kid\'s row in TV Shows to "TV Shows picked for Robin"',
+    ]
+
+
+def test_a_dry_run_reports_a_rename_without_making_it():
+    plex = household()
+    arrange(plex, {KID}, {}, dry_run=False)
+    plex.writes.clear()
+    plex.shares_[KID] = replace(plex.shares_[KID], title="Robin")
+
+    result = arrange(plex, {KID}, {KID: "kid"}, dry_run=True)
+
+    assert plex.writes == []
+    assert describe(result, {KID: "kid"}, dry_run=True)[0] == (
+        'Would rename kid\'s row in Movies to "Movies picked for Robin"'
+    )
+
+
+def test_a_departed_members_row_keeps_its_title():
+    plex = household()
+    arrange(plex, {KID, ADULT}, {}, dry_run=False)
+    del plex.shares_[KID], plex.tokens[KID]
     plex.writes.clear()
 
-    result = arrange(plex, {KID}, {KID: "kid2"}, dry_run=False)
+    arrange(plex, {ADULT}, {KID: "kid", ADULT: "adult"}, dry_run=False)
 
-    assert plex.writes == [] and len(result.on_home) == 2
+    assert plex.writes == []
 
 
 def test_a_row_shown_only_on_someones_home_is_taken_off(monkeypatch):
@@ -288,7 +381,7 @@ def test_a_row_waits_while_a_late_filter_still_shows_it():
         (KID, [ADULT]),
     ]
     assert describe(first, {KID: "kid", ADULT: "adult"}, dry_run=False)[-1] == (
-        "Not promoted yet: kid's row in TV Shows, adult can still see it"
+        "Holding picks back from kid's row in TV Shows: adult can still see it"
     )
 
     plex.applied[ADULT] = (plex.shares_[ADULT].movies, plex.shares_[ADULT].television)
@@ -298,15 +391,17 @@ def test_a_row_waits_while_a_late_filter_still_shows_it():
     assert second.rules == []
 
 
-def test_the_admins_row_is_on_their_own_home_only_with_no_rules():
+def test_the_admins_row_is_on_their_own_home_and_hidden_from_everyone():
     plex = household()
 
     result = arrange(plex, {ADMIN}, {}, dry_run=False)
 
     assert [r.user_id for r in result.created] == [ADMIN, ADMIN]
     assert set(plex.promoted.values()) == {OWN_HOME}
-    assert result.rules == []
-    assert all(w[0] != "filters" for w in plex.writes)
+    assert sorted(result.rules) == [KID, ADULT]
+    assert plex.shares_[ADULT] == Share(
+        ADULT, "label!=handpicked-1", "label!=handpicked-1", "Alex Adult"
+    )
 
 
 def test_a_member_never_hides_their_own_row():
@@ -354,7 +449,7 @@ def test_a_member_yet_to_accept_gets_rules_and_holds_back_every_row():
 
     assert "haven't accepted the server invite" in result.holding[ADULT]
     assert plex.shares_[ADULT] == Share(
-        ADULT, "label!=handpicked-2", "label!=handpicked-2"
+        ADULT, "label!=handpicked-2", "label!=handpicked-2", "Alex Adult"
     )
     assert result.promoted == [] and len(result.waiting) == 2
 
@@ -393,7 +488,7 @@ def test_a_promoted_row_someone_can_see_is_taken_off_home_screens():
     arrange(plex, {KID}, {}, dry_run=False)
     # A filter edited by hand drops the rule.
     plex.applied[ADULT] = ("", "")
-    plex.shares_[ADULT] = Share(ADULT, "", "")
+    plex.shares_[ADULT] = Share(ADULT, "", "", "Alex Adult")
     plex.late.add(ADULT)
 
     result = arrange(plex, {KID}, {}, dry_run=False)

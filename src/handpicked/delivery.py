@@ -18,7 +18,7 @@ class Delivery:
     delivered: list[tuple[Change, Row]] = field(default_factory=list)
     undelivered: list[Change] = field(default_factory=list)
     not_found: list[Change] = field(default_factory=list)
-    waiting: list[Change] = field(default_factory=list)  # no row on Home for it
+    waiting: list[Change] = field(default_factory=list)  # no row it can go in
     error: str | None = None
 
 
@@ -158,7 +158,8 @@ def describe(delivery: Delivery, names: dict[int, str], dry_run: bool) -> list[s
         for p in delivery.not_found
     ]
     lines += [
-        f"Not delivered yet: {title(p)}, {name(p.user_id)}'s row isn't on their Home"
+        f"Not delivered yet: {title(p)}, {name(p.user_id)}'s row isn't on their"
+        " Home, or someone else can see it"
         for p in delivery.waiting
     ]
     if delivery.error:

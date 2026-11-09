@@ -1,8 +1,10 @@
-"""Give each member a private "Picked for <name>" row on their Plex Home.
+"""Give each member a private "<library> picked for <name>" row on their Plex
+Home.
 
-Each member's row is a collection with a title and label of their own in each
-movie and TV library, hidden from every other member by a `label!=` rule in their share
-filter. A row is promoted to members' Homes only once no one else can see it.
+Each member's row is a collection with a label of their own in each movie and
+TV library, hidden from every other member by a `label!=` rule in their share
+filter. A row is promoted to members' Homes, and filled, only once no one else
+can see it.
 See open question 1 in docs/V2.md.
 """
 
@@ -27,12 +29,9 @@ def label(user_id: int) -> str:
     return f"{LABEL_PREFIX}{user_id}"
 
 
-def title(user_id: int, names: dict[int, str]) -> str:
-    """A row's title, which must be the member's own when it's made: Plex
-    gives collections made with one title one tag, so an item added to one is
-    in all of them, and renaming doesn't separate them. A row made before a
-    member changed their username keeps the old one."""
-    return f"Picked for {names.get(user_id, f'Plex user {user_id}')}"
+def title(section: Section, name: str) -> str:
+    """Members can share one: Plex.create_collection keeps rows' tags apart."""
+    return f"{section.title} picked for {name}"
 
 
 def unsupported(raw: str) -> str | None:
@@ -114,6 +113,7 @@ class Rows:
     """What one run did to members' rows, or would have in a dry run."""
 
     created: list[Row] = field(default_factory=list)
+    renamed: list[tuple[Row, str]] = field(default_factory=list)  # with the title
     rules: list[int] = field(default_factory=list)  # members whose filters changed
     promoted: list[Row] = field(default_factory=list)
     demoted: list[tuple[Row, list[int]]] = field(default_factory=list)
@@ -121,17 +121,19 @@ class Rows:
     holding: dict[int, str] = field(default_factory=dict)  # member: why
     error: str | None = None
     found: list[Row] = field(default_factory=list)  # every row that exists
-    # Rows on their member's Home after the run, or that would be in a dry run.
+    # Rows delivery can fill: on their member's Home after the run, or that
+    # would be in a dry run, and seen by no one else.
     on_home: list[Row] = field(default_factory=list)
 
 
 def arrange(
     plex: Plex, include: set[int], names: dict[int, str], dry_run: bool
 ) -> Rows:
-    """Make each included member's rows, hide them from everyone else, and
-    promote the ones no one else can see. `names` has every user Handpicked
-    has seen, so the row of a member who has left stays hidden. Stops at a
-    Plex error, keeping what it got to: every step is safe to run again."""
+    """Make each included member's rows, title them, hide them from everyone
+    else, and promote the ones no one else can see. `names` has every user
+    Handpicked has seen, by username, so the row of a member who has left
+    stays hidden. Stops at a Plex error, keeping what it got to: every step
+    is safe to run again."""
     rows = Rows()
     try:
         _arrange(plex, include, names, dry_run, rows)
@@ -143,9 +145,17 @@ def arrange(
 def _arrange(
     plex: Plex, include: set[int], names: dict[int, str], dry_run: bool, rows: Rows
 ) -> None:
-    admin = plex.account_id()
+    account = plex.account()
+    admin = account.user_id
     machine_id = plex.server().machine_id
     shares = {share.user_id: share for share in plex.shares(machine_id)}
+    # The first name on plex.tv, or the username. Members who have left keep
+    # their rows' titles.
+    full = {u: s.title for u, s in shares.items()} | {admin: account.title}
+    first = {
+        u: (name.split() or [names.get(u) or f"Plex user {u}"])[0]
+        for u, name in full.items()
+    }
     presets = plex.age_presets()
     tokens = plex.member_tokens(machine_id)
     sections = plex.sections()
@@ -166,7 +176,14 @@ def _arrange(
             found = plex.collections(section, label(user_id))
             if not found:
                 continue
-            members_rows.append(Row(user_id, section, found[0]))
+            key, current = next(iter(found.items()))
+            row = Row(user_id, section, key)
+            members_rows.append(row)
+            wanted = title(section, first[user_id]) if user_id in first else current
+            if current != wanted:
+                if not dry_run:
+                    plex.rename_collection(section, key, wanted)
+                rows.renamed.append((row, wanted))
     have = {(r.user_id, r.section) for r in members_rows}
     for user_id in sorted(include):
         if (user_id not in shares and user_id != admin) or user_id in rows.holding:
@@ -177,15 +194,14 @@ def _arrange(
             key = None
             if not dry_run:
                 key = plex.create_collection(
-                    section, title(user_id, names), label(user_id)
+                    section, title(section, first[user_id]), label(user_id)
                 )
             row = Row(user_id, section, key)
             rows.created.append(row)
             members_rows.append(row)
     rows.found = [r for r in members_rows if r.key]
 
-    # The admin's row is only on their own Home, so it needs no rules.
-    hidden = {label(r.user_id) for r in members_rows if r.user_id != admin}
+    hidden = {label(r.user_id) for r in members_rows}
     for user_id, share in shares.items():
         if user_id in unchangeable:
             continue
@@ -241,12 +257,17 @@ def _promote(
 ) -> None:
     current = promoted.get(hub_id(row.section, row.key))
     if row.user_id == admin:
+        # Only ever on the admin's own Home, so it's promoted at once, but
+        # it's filled only once no one else can see it.
         if current is None and admin in include:
             if not dry_run:
                 plex.promote(row.section, row.key, OWN_HOME)
             rows.promoted.append(row)
         if current is not None or admin in include:
-            rows.on_home.append(row)
+            if seen_by:
+                rows.waiting.append((row, seen_by))
+            else:
+                rows.on_home.append(row)
         return
     if current is not None:
         # A member added since, or a filter edited by hand, can show a
@@ -290,6 +311,9 @@ def describe(rows: Rows, names: dict[int, str], dry_run: bool) -> list[str]:
         for u, reason in rows.holding.items()
     ]
     lines += [f"{did('Made', 'make')} {where(r)}" for r in rows.created]
+    lines += [
+        f'{did("Renamed", "rename")} {where(r)} to "{new}"' for r, new in rows.renamed
+    ]
     if rows.rules:
         lines.append(
             f"{did('Updated', 'update')} the filters of {who(rows.rules)},"
@@ -301,7 +325,7 @@ def describe(rows: Rows, names: dict[int, str], dry_run: bool) -> list[str]:
         for r, seen in rows.demoted
     ]
     lines += [
-        f"Not promoted yet: {where(r)}, {who(seen)} can still see it"
+        f"Holding picks back from {where(r)}: {who(seen)} can still see it"
         for r, seen in rows.waiting
         if seen
     ]
