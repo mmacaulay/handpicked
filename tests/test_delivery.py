@@ -185,6 +185,173 @@ def test_a_dry_run_reports_a_hidden_pick_the_same_way(conn):
     ]
 
 
+def test_a_delivered_pick_plex_hides_since_is_taken_back_out(conn):
+    pick(conn, 1, delivered="50")
+    plex = FakePlex({1: [Item("1", "50", "ca/R")]}, {"100": {"50"}})
+    view = View(hidden={"50"})
+    rows = Rows(found=[ROW], on_home=[ROW], views={KID: view})
+
+    first = deliver(conn, plex, rows, [], NOW, dry_run=False)
+
+    # Undelivered, so the ignore window can't run out while it's hidden.
+    assert plex.writes == [("remove", "100", "50")]
+    assert delivery_times(conn) == {1: (None, None)}
+    assert conn.execute("SELECT plex_rating_key FROM suggestions").fetchone()[0] is None
+    assert describe(first, {KID: "kid"}, dry_run=False) == [
+        "Took Pick 1 (2020) out of kid's row in Movies: Plex hides it from them now",
+        "Hidden from kid in Plex: Pick 1 (2020), Plex rates it ca/R, tried again"
+        " next run",
+    ]
+
+    view.hidden.clear()
+    plex.writes.clear()
+    deliver(conn, plex, rows, [], NOW + 1, dry_run=False)
+
+    # With a new window.
+    assert plex.writes == [("add", "100", "50")]
+    assert delivery_times(conn) == {1: (NOW + 1, None)}
+
+
+def test_a_dry_run_reports_a_delivered_pick_plex_hides_since(conn):
+    pick(conn, 1, delivered="50")
+    plex = FakePlex({1: [Item("1", "50")]}, {"100": {"50"}})
+    rows = Rows(found=[ROW], on_home=[ROW], views={KID: View(hidden={"50"})})
+
+    result = deliver(conn, plex, rows, [], NOW, dry_run=True)
+
+    assert plex.writes == []
+    assert delivery_times(conn) == {1: (1, None)}
+    assert describe(result, {KID: "kid"}, dry_run=True)[0] == (
+        "Would take Pick 1 (2020) out of kid's row in Movies: Plex hides it from"
+        " them now"
+    )
+
+
+def test_a_delivered_pick_plex_hides_since_moves_to_a_copy_they_see(conn):
+    pick(conn, 1, delivered="51")
+    row_4k = Row(KID, MOVIES_4K, "300")
+    plex = FakePlex(
+        {1: [Item("3", "51"), Item("1", "50")]}, {"100": set(), "300": {"51"}}
+    )
+    rows = Rows(
+        found=[ROW, row_4k], on_home=[ROW, row_4k], views={KID: View(hidden={"51"})}
+    )
+
+    result = deliver(conn, plex, rows, [], NOW, dry_run=False)
+
+    assert plex.writes == [("remove", "300", "51"), ("add", "100", "50")]
+    assert delivery_times(conn) == {1: (NOW, None)}
+    assert describe(result, {KID: "kid"}, dry_run=False) == [
+        "Took Pick 1 (2020) out of kid's row in Movies 4K: Plex hides it from them now",
+        "Added Pick 1 (2020) to kid's row in Movies",
+    ]
+
+
+def test_a_delivered_pick_deleted_from_plex_is_left_to_settle(conn):
+    # Plex answers 404 for it too, as if hidden.
+    pick(conn, 1, delivered="50")
+    plex = FakePlex({}, {"100": set()})
+    rows = Rows(found=[ROW], on_home=[ROW], views={KID: View(hidden={"50"})})
+
+    result = deliver(conn, plex, rows, [], NOW, dry_run=False)
+
+    assert delivery_times(conn) == {1: (1, None)}
+    assert describe(result, {KID: "kid"}, dry_run=False) == []
+
+
+def test_a_delivered_pick_plex_re_added_under_a_new_key_is_left_to_settle(conn):
+    pick(conn, 1, delivered="50")
+    plex = FakePlex({1: [Item("1", "77")]}, {"100": set()})
+    rows = Rows(found=[ROW], on_home=[ROW], views={KID: View(hidden={"50"})})
+
+    result = deliver(conn, plex, rows, [], NOW, dry_run=False)
+
+    assert plex.writes == []
+    assert delivery_times(conn) == {1: (1, None)}
+    assert describe(result, {KID: "kid"}, dry_run=False) == []
+
+
+def test_an_item_plex_fails_to_check_holds_up_only_its_pick(conn):
+    pick(conn, 1, "watched", delivered="50")
+    pick(conn, 2, delivered="51")
+    pick(conn, 3)
+    pick(conn, 4)
+    plex = FakePlex(
+        {2: [Item("1", "51")], 3: [Item("1", "52")], 4: [Item("1", "53")]},
+        {"100": {"50", "51"}},
+    )
+
+    class Failing(View):
+        def has_item(self, rating_key):
+            if rating_key in ("51", "52"):
+                raise PlexError(
+                    f"http://plex/library/metadata/{rating_key}: HTTP 500", 500
+                )
+            return True
+
+    rows = Rows(found=[ROW], on_home=[ROW], views={KID: Failing()})
+
+    result = deliver(conn, plex, rows, [], NOW, dry_run=False)
+
+    assert plex.writes == [("remove", "100", "50"), ("add", "100", "53")]
+    assert delivery_times(conn) == {
+        1: (1, NOW),
+        2: (1, None),
+        3: (None, None),
+        4: (NOW, None),
+    }
+    assert result.error is None
+    assert describe(result, {KID: "kid"}, dry_run=False)[2:] == [
+        "Couldn't check whether kid can see Pick 2 (2020) in Plex: Plex error:"
+        " http://plex/library/metadata/51: HTTP 500, tried again next run",
+        "Couldn't check whether kid can see Pick 3 (2020) in Plex: Plex error:"
+        " http://plex/library/metadata/52: HTTP 500, tried again next run",
+    ]
+
+
+@pytest.mark.parametrize("status_code", [None, 401])
+def test_an_error_not_about_the_item_still_stops_the_run(conn, status_code):
+    pick(conn, 1, delivered="50")
+    plex = FakePlex({1: [Item("1", "50")]}, {"100": {"50"}})
+
+    class Failing(View):
+        def has_item(self, rating_key):
+            raise PlexError("http://plex/library/metadata/50: failed", status_code)
+
+    rows = Rows(found=[ROW], on_home=[ROW], views={KID: Failing()})
+
+    result = deliver(conn, plex, rows, [], NOW, dry_run=False)
+
+    assert result.error == "Plex error: http://plex/library/metadata/50: failed"
+    assert result.unchecked == []
+
+
+def test_a_hidden_pick_already_out_of_its_row_gets_no_take_out_line(conn):
+    pick(conn, 1, delivered="50")
+    plex = FakePlex({1: [Item("1", "50", "ca/R")]}, {"100": set()})
+    rows = Rows(found=[ROW], on_home=[ROW], views={KID: View(hidden={"50"})})
+
+    result = deliver(conn, plex, rows, [], NOW, dry_run=False)
+
+    assert delivery_times(conn) == {1: (None, None)}
+    assert describe(result, {KID: "kid"}, dry_run=False) == [
+        "Hidden from kid in Plex: Pick 1 (2020), Plex rates it ca/R, tried again"
+        " next run",
+    ]
+
+
+def test_a_delivered_pick_is_left_alone_without_a_view_to_check(conn):
+    pick(conn, 1, delivered="50")
+    plex = FakePlex({1: [Item("1", "50")]}, {"100": {"50"}})
+
+    result = deliver(
+        conn, plex, Rows(found=[ROW], on_home=[ROW]), [], NOW, dry_run=False
+    )
+
+    assert plex.writes == [] and describe(result, {}, dry_run=False) == []
+    assert delivery_times(conn) == {1: (1, None)}
+
+
 def test_a_pick_waits_for_a_member_yet_to_accept_the_invite(conn):
     pick(conn, 1)
     plex = FakePlex({1: [Item("1", "50")]}, {"100": set()})
