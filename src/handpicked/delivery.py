@@ -1,5 +1,6 @@
 """Put each available pick in its member's Plex row, and take it out once its
-outcome settles. See "Pipeline additions" in docs/V2.md."""
+outcome settles, or once Plex hides it from them. See "Pipeline additions"
+in docs/V2.md."""
 
 import sqlite3
 from dataclasses import dataclass, field
@@ -17,9 +18,12 @@ class Delivery:
 
     delivered: list[tuple[Change, Row]] = field(default_factory=list)
     undelivered: list[Change] = field(default_factory=list)
+    # Taken back out, with the rows it was in.
+    hidden_since: list[tuple[Change, list[Row]]] = field(default_factory=list)
     not_found: list[Change] = field(default_factory=list)
     hidden: list[tuple[Change, Item]] = field(default_factory=list)  # from its member
     waiting: list[Change] = field(default_factory=list)  # no row it can go in
+    unchecked: list[tuple[Change, str]] = field(default_factory=list)  # with why
     error: str | None = None
 
 
@@ -31,9 +35,10 @@ def deliver(
     now: int,
     dry_run: bool,
 ) -> Delivery:
-    """Deliver available picks and undeliver settled ones. `changes` are this
-    run's status changes, which a dry run hasn't recorded. Each pick is
-    recorded as soon as Plex has it, so a Plex error keeps what was done."""
+    """Deliver available picks, and undeliver settled ones and ones Plex now
+    hides from their member. `changes` are this run's status changes, which
+    a dry run hasn't recorded. Each pick is recorded as soon as Plex has it,
+    so a Plex error keeps what was done."""
     delivery = Delivery()
     try:
         _deliver(conn, plex, rows, changes, now, dry_run, delivery)
@@ -53,6 +58,7 @@ def _deliver(
 ) -> None:
     status = {c.row_id: c.status for c in changes}
     to_deliver: list[Change] = []
+    to_recheck: list[tuple[Change, str]] = []  # with the item delivered
     to_undeliver: list[tuple[Change, str]] = []  # with the item delivered
     for row in conn.execute(
         """
@@ -70,7 +76,9 @@ def _deliver(
                 to_deliver.append(pick)
         elif pick.status in OUTCOMES:
             to_undeliver.append((pick, row["plex_rating_key"]))
-    if not to_deliver and not to_undeliver:
+        elif pick.status == "available":
+            to_recheck.append((pick, row["plex_rating_key"]))
+    if not to_deliver and not to_recheck and not to_undeliver:
         return
 
     contents: dict[Row, set[str]] = {}
@@ -89,8 +97,53 @@ def _deliver(
                     {**columns, "id": pick.row_id},
                 )
 
+    def take_out(pick: Change, rating_key: str) -> list[Row]:
+        """The rows it was taken out of."""
+        taken = []
+        for row in (r for r in rows.found if r.user_id == pick.user_id):
+            if rating_key in items_in(row):
+                if not dry_run:
+                    plex.remove_from_collection(row.key, rating_key)
+                items_in(row).discard(rating_key)
+                taken.append(row)
+        return taken
+
+    def sees(pick: Change, view: Plex, rating_key: str) -> bool | None:
+        """Whether the member sees the item, or None when Plex fails to say:
+        one item's error doesn't hold up everyone's picks. One that isn't
+        about the item, such as a lost connection, still stops the run."""
+        try:
+            return view.has_item(rating_key)
+        except PlexError as e:
+            if e.status_code in (None, 401, 403):
+                raise
+            delivery.unchecked.append((pick, f"Plex error: {e}"))
+            return None
+
+    # First, so a member's view failing doesn't keep settled picks in rows.
+    for pick, rating_key in to_undeliver:
+        take_out(pick, rating_key)
+        # Also when it's already gone: taken out by hand, or deleted from
+        # the library.
+        record(pick, undelivered_at=now)
+        delivery.undelivered.append(pick)
+
+    unseen = []
+    for pick, rating_key in to_recheck:
+        member = rows.views.get(pick.user_id)
+        if member is not None and sees(pick, member, rating_key) is False:
+            unseen.append((pick, rating_key))
+    library = plex.library_items() if to_deliver or unseen else {}
+    for pick, rating_key in unseen:
+        # Deleted or re-keyed, Plex answers 404 for it too: left to settle.
+        if not any(i.rating_key == rating_key for i in library.get(_title(pick), [])):
+            continue
+        if taken := take_out(pick, rating_key):
+            delivery.hidden_since.append((pick, taken))
+        record(pick, delivered_at=None, plex_rating_key=None)
+        to_deliver.append(pick)
+
     on_home = {(r.user_id, r.section.key): r for r in rows.on_home}
-    library = plex.library_items() if to_deliver else {}
     machine_id = plex.server().machine_id if to_deliver else ""
     for pick in to_deliver:
         found = library.get(_title(pick), [])
@@ -106,24 +159,20 @@ def _deliver(
         # The first library it's in with the member's row on Home, such as
         # the main library over a 4K one, and that Plex shows them: delivered
         # unseen, it would be ignored after the window.
-        visible = next((t for t in targets if view.has_item(t[0].rating_key)), None)
-        if visible is None:
+        for target in targets:
+            seen = sees(pick, view, target[0].rating_key)
+            if seen is not False:
+                break
+        else:
             delivery.hidden.append((pick, targets[0][0]))
             continue
-        item, row = visible
+        if seen is None:
+            continue
+        item, row = target
         if not dry_run and item.rating_key not in items_in(row):
             plex.add_to_collection(machine_id, row.key, item.rating_key)
         record(pick, delivered_at=now, plex_rating_key=item.rating_key)
         delivery.delivered.append((pick, row))
-
-    for pick, rating_key in to_undeliver:
-        for row in (r for r in rows.found if r.user_id == pick.user_id):
-            if rating_key in items_in(row) and not dry_run:
-                plex.remove_from_collection(row.key, rating_key)
-        # Also when it's already gone: taken out by hand, or deleted from
-        # the library.
-        record(pick, undelivered_at=now)
-        delivery.undelivered.append(pick)
 
 
 def _title(pick: Change) -> Title:
@@ -159,6 +208,12 @@ def describe(delivery: Delivery, names: dict[int, str], dry_run: bool) -> list[s
         return "Plex has no rating for it"
 
     lines = [
+        f"{did('Took', 'take')} {title(p)} out of {name(p.user_id)}'s row in"
+        f" {' and '.join(r.section.title for r in taken)}: Plex hides it from"
+        " them now"
+        for p, taken in delivery.hidden_since
+    ]
+    lines += [
         f"{did('Added', 'add')} {title(p)} to {name(p.user_id)}'s row"
         f" in {row.section.title}"
         for p, row in delivery.delivered
@@ -180,6 +235,11 @@ def describe(delivery: Delivery, names: dict[int, str], dry_run: bool) -> list[s
         f"Not delivered yet: {title(p)}, {name(p.user_id)}'s row isn't on their"
         " Home, or someone else can see it"
         for p in delivery.waiting
+    ]
+    lines += [
+        f"Couldn't check whether {name(p.user_id)} can see {title(p)} in Plex:"
+        f" {why}, tried again next run"
+        for p, why in delivery.unchecked
     ]
     if delivery.error:
         lines.append(delivery.error)
