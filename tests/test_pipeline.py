@@ -150,3 +150,30 @@ def test_tmdb_error_skips_the_user_and_keeps_the_cache(conn, tmp_path):
     assert other.execute("SELECT key FROM tmdb_cache").fetchall()[0][0] == (
         "/movie/1/recommendations"
     )
+
+
+def test_tmdb_error_counting_episodes_skips_the_user(conn):
+    watch(conn, 7, 1, 2)
+    watch(conn, 8, 3, 4)
+    with conn:
+        conn.execute(
+            """
+            INSERT INTO watch_events (
+                reference_id, user_id, media_type, rating_key,
+                grandparent_rating_key, title, percent_complete, started, stopped
+            ) VALUES (100, 7, 'episode', 101, 50, 'title', 100, 0, ?)
+            """,
+            (NOW - DAY,),
+        )
+        conn.execute("INSERT INTO tmdb_ids VALUES (50, 50, 0)")
+
+    class FailingTmdb(FakeTmdb):
+        def episodes(self, tmdb_id):
+            raise TmdbError("rate limited", 429)
+
+    tmdb = FailingTmdb({("movie", 3): [rec(10)]})
+    failed, picked = recommend(conn, CONFIG, tmdb, FakeSeerr(), [user(7), user(8)], NOW)
+
+    assert (failed.picks, failed.skipped) == (None, "TMDB error: rate limited")
+    assert len(failed.history.seeds) == 2
+    assert [p.candidate.tmdb_id for p in picked.picks.picks] == [10]

@@ -41,7 +41,14 @@ def recommend(
     try:
         for user in included:
             viewings = seeds.load_viewings(conn, user.user_id)
-            history = seeds.analyze(viewings, config.thresholds, now)
+            try:
+                history = seeds.analyze(viewings, config.thresholds, now, tmdb.episodes)
+            except TmdbError as e:
+                # Without short shows, for the log and the digest. A finished
+                # one would be counted abandoned, so it can't feed picks.
+                history = seeds.analyze(viewings, config.thresholds, now)
+                results.append(UserPicks(user, history, None, f"TMDB error: {e}"))
+                continue
             min_seeds = config.thresholds.min_seeds
             if len(history.seeds) < min_seeds:
                 skipped = f"{len(history.seeds)} seeds, needs {min_seeds}"

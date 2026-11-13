@@ -5,8 +5,16 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 
 from handpicked.config import Config
-from handpicked.seeds import DAY, Viewing, finish_times, load_viewings
+from handpicked.seeds import (
+    DAY,
+    Episodes,
+    Viewing,
+    enough_episodes,
+    finish_times,
+    load_viewings,
+)
 from handpicked.suggestions import Change, write_statuses
+from handpicked.tmdb import TmdbError
 
 WEEK = 7 * DAY
 OUTCOMES = ("watched", "abandoned", "ignored")
@@ -33,11 +41,13 @@ def record(
     now: int,
     dry_run: bool = False,
     delivering: bool = False,
+    episodes: Episodes | None = None,
 ) -> list[Change]:
     """Settle available picks from watch history, and recheck ignored ones.
     With `delivering` (Plex configured), a pick is only ignored once it's been
-    in the member's row for the ignore window. A dry run returns the outcomes
-    without recording them."""
+    in the member's row for the ignore window. `episodes` counts a short show
+    finished below the minimum. A dry run returns the outcomes without
+    recording them."""
     changes: list[Change] = []
     rows = conn.execute(
         "SELECT * FROM suggestions WHERE status IN ('available', 'ignored')"
@@ -54,7 +64,7 @@ def record(
             for v in titles[user_id].get((row["media_type"], row["tmdb_id"]), [])
             if v.stopped >= row["requested_at"]
         ]
-        outcome = _outcome(row, item, config, now, delivering)
+        outcome = _outcome(row, item, config, now, delivering, episodes)
         if outcome is not None and outcome != row["status"]:
             changes.append(Change.of(row, outcome))
 
@@ -105,7 +115,12 @@ def _by_title(viewings: list[Viewing]) -> dict[tuple[str, int], list[Viewing]]:
 
 
 def _outcome(
-    row: sqlite3.Row, item: list[Viewing], config: Config, now: int, delivering: bool
+    row: sqlite3.Row,
+    item: list[Viewing],
+    config: Config,
+    now: int,
+    delivering: bool,
+    episodes: Episodes | None,
 ) -> str | None:
     """The pick's outcome from its viewings, or None while it's unsettled."""
     movie = row["media_type"] == "movie"
@@ -119,9 +134,16 @@ def _outcome(
             return None
         return "ignored" if now - start >= weeks * WEEK else None
     thresholds = config.thresholds
-    needed = 1 if movie else thresholds.tv_min_finished_episodes
-    if len(finish_times(item, thresholds.completion_pct)) >= needed:
+    finished = len(finish_times(item, thresholds.completion_pct))
+    if movie and finished:
         return "watched"
+    if not movie:
+        try:
+            if enough_episodes(finished, row["tmdb_id"], thresholds, episodes):
+                return "watched"
+        except TmdbError:
+            # Abandoned is final, so not settled until TMDB can say.
+            return None
     weeks = windows.movie_abandon_weeks if movie else windows.tv_abandon_weeks
     # A partly available show can be started before season 1 is all there,
     # and the member can't return until it is.

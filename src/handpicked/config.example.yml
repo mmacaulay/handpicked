@@ -47,7 +47,7 @@ thresholds:
   seed_window_days: 90        # how far back seeds are taken from
   min_seeds: 3                # users with fewer seeds are skipped
   min_vote_count: 100         # ignore TMDB titles with fewer votes
-  tv_min_finished_episodes: 3 # finished episodes before a show is a seed
+  tv_min_finished_episodes: 3 # finished episodes before a show is a seed, or all of a shorter one
   tv_abandon_weeks: 4         # weeks without returning before a show is abandoned
 
 # When a pick's outcome is settled, once it's available. Watched uses the

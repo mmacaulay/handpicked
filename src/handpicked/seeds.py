@@ -2,6 +2,7 @@
 
 import sqlite3
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from handpicked.config import Thresholds
@@ -16,6 +17,9 @@ ABANDONED_WEIGHT = -0.5
 # A second finish this soon is one viewing, e.g. stopping at the credits
 # (counted as finished) and later playing the last few minutes.
 REPEAT_FINISH = DAY
+
+# A show's episode count by TMDB id, or None when unknown.
+Episodes = Callable[[int], int | None]
 
 
 @dataclass(frozen=True)
@@ -76,7 +80,12 @@ def load_viewings(conn: sqlite3.Connection, user_id: int) -> list[Viewing]:
     return [Viewing(**row) for row in rows]
 
 
-def analyze(viewings: list[Viewing], thresholds: Thresholds, now: int) -> History:
+def analyze(
+    viewings: list[Viewing],
+    thresholds: Thresholds,
+    now: int,
+    episodes: Episodes | None = None,
+) -> History:
     """Seeds and abandoned titles from viewings sorted by stopped."""
     window = thresholds.seed_window_days * DAY
     window_start = now - window
@@ -111,7 +120,7 @@ def analyze(viewings: list[Viewing], thresholds: Thresholds, now: int) -> Histor
                 and max(v.percent_complete for v in item) < thresholds.abandon_pct
             )
         else:
-            is_seed = len(recent) >= thresholds.tv_min_finished_episodes
+            is_seed = enough_episodes(len(recent), tmdb_id, thresholds, episodes)
             is_abandoned = (
                 len({v.rating_key for v in item}) <= 2
                 and window_start
@@ -129,6 +138,19 @@ def analyze(viewings: list[Viewing], thresholds: Thresholds, now: int) -> Histor
                 Seed(seed_type, tmdb_id, latest.title, ABANDONED_WEIGHT)
             )
     return history
+
+
+def enough_episodes(
+    finished: int, tmdb_id: int, thresholds: Thresholds, episodes: Episodes | None
+) -> bool:
+    """Whether a show with `finished` episodes counts as watched: the minimum,
+    or every episode of a shorter show. Looked up only when it could decide."""
+    if finished >= thresholds.tv_min_finished_episodes:
+        return True
+    if not finished or episodes is None:
+        return False
+    count = episodes(tmdb_id)
+    return count is not None and 0 < count <= finished
 
 
 def finish_times(item: list[Viewing], completion_pct: int) -> dict[int, list[int]]:
