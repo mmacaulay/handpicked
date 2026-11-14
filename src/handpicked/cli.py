@@ -271,7 +271,10 @@ def _run_steps(
         f" {stats.resolved} titles resolved,"
         f" {stats.unresolved} unresolved (retried next run)"
     )
-    settled = outcomes.record(conn, config, now, dry_run, delivering=plex is not None)
+    tmdb = Tmdb(config.services.tmdb.token, TmdbCache(conn))
+    settled = outcomes.record(
+        conn, config, now, dry_run, delivering=plex is not None, episodes=tmdb.episodes
+    )
     changes.extend(settled)
     counts = Counter(c.status for c in settled)
     print(
@@ -296,7 +299,6 @@ def _run_steps(
         for line in report.rows:
             print(f"  {line}")
 
-    tmdb = Tmdb(config.services.tmdb.token, TmdbCache(conn))
     results = recommend(conn, config, tmdb, seerr, included, now)
     for result in results:
         requested = None

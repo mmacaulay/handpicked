@@ -36,6 +36,10 @@ class FakeTmdb:
         key = (media_type, tmdb_id)
         return self.titles[key] if key in self.titles else title(tmdb_id, media_type)
 
+    def episodes(self, tmdb_id):
+        title = self.details("tv", tmdb_id)
+        return title.episodes if title else None
+
 
 def pick(history, tmdb, exclude=frozenset(), count=3, max_age=None, min_vote_count=100):
     return choose(

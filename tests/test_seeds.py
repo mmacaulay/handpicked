@@ -39,9 +39,9 @@ def viewing(media_type, key, item, pct, days_ago, hours, tmdb_id):
     )
 
 
-def run(*viewings, **thresholds):
+def run(*viewings, episodes=None, **thresholds):
     ordered = sorted(viewings, key=lambda v: v.stopped)
-    return analyze(ordered, Thresholds(**thresholds), NOW)
+    return analyze(ordered, Thresholds(**thresholds), NOW, episodes)
 
 
 def weights(seeds):
@@ -129,6 +129,47 @@ def test_show_needs_distinct_finished_episodes():
     )
 
     assert history.seeds == []
+
+
+def test_short_show_with_every_episode_finished_is_a_seed():
+    history = run(
+        episode(11, 100, 100, 20),
+        episode(12, 100, 100, 10),
+        episodes={1100: 2}.get,
+    )
+
+    assert weights(history.seeds) == {("tv", 1100): pytest.approx(recency(10))}
+    assert history.abandoned == []
+
+
+@pytest.mark.parametrize("count", [3, 0, None])
+def test_short_show_partly_finished_or_with_no_count_needs_the_minimum(count):
+    history = run(
+        episode(11, 100, 100, 40),
+        episode(12, 100, 100, 30),
+        episodes={1100: count}.get,
+    )
+
+    assert history.seeds == []
+    assert weights(history.abandoned) == {("tv", 1100): ABANDONED_WEIGHT}
+
+
+def test_episode_count_is_only_looked_up_below_the_minimum():
+    looked_up = []
+
+    def episodes(tmdb_id):
+        looked_up.append(tmdb_id)
+        return 1
+
+    history = run(
+        *(episode(10 + i, 100, 100, 10) for i in range(3)),
+        episode(21, 200, 50, 10),
+        episode(31, 300, 100, 1),
+        episodes=episodes,
+    )
+
+    assert weights(history.seeds).keys() == {("tv", 1100), ("tv", 1300)}
+    assert looked_up == [1300]
 
 
 def test_show_with_a_rewatched_episode_is_boosted():

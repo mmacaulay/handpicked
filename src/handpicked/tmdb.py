@@ -36,6 +36,9 @@ class Title:
     certification: str | None
     age: int | None
     poster_path: str | None = None
+    # Of a show that's ended, not counting specials. An airing show's count
+    # only covers the episodes listed so far.
+    episodes: int | None = None
 
     @property
     def poster_url(self) -> str | None:
@@ -108,7 +111,17 @@ class Tmdb:
             certification=certification,
             age=age,
             poster_path=body.get("poster_path"),
+            episodes=(
+                body.get("number_of_episodes")
+                if body.get("status") in ("Ended", "Canceled")
+                else None
+            ),
         )
+
+    def episodes(self, tmdb_id: int) -> int | None:
+        """An ended show's episode count, or None if TMDB doesn't know it."""
+        title = self.details("tv", tmdb_id)
+        return title.episodes if title else None
 
     def _get(self, path: str, params: dict[str, str] | None = None) -> Any | None:
         """Response body, or None on 404. Served from the cache while fresh."""

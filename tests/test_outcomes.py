@@ -6,6 +6,7 @@ from test_pipeline import CONFIG, NOW
 from handpicked import db
 from handpicked.outcomes import WEEK, landed, record
 from handpicked.suggestions import Change
+from handpicked.tmdb import TmdbError
 
 
 def counts(changes):
@@ -96,6 +97,30 @@ def test_a_show_is_watched_at_the_minimum_finished_episodes(conn):
 
     assert counts(record(conn, CONFIG, NOW)) == {"watched": 1}
     assert outcomes(conn) == {("tv", 1): "watched", ("tv", 2): "available"}
+
+
+@pytest.mark.parametrize(
+    ("count", "expected"), [(2, "watched"), (3, "abandoned"), (None, "abandoned")]
+)
+def test_a_short_show_is_watched_once_every_episode_is_finished(conn, count, expected):
+    pick(conn, 1, "tv", available=10)
+    view(conn, 1, 9, episode=1)
+    view(conn, 1, 8, episode=2)
+
+    record(conn, CONFIG, NOW, episodes={1: count}.get)
+
+    assert outcomes(conn) == {("tv", 1): expected}
+
+
+def test_a_short_show_stays_unsettled_while_tmdb_fails(conn):
+    pick(conn, 1, "tv", available=10)
+    view(conn, 1, 9, episode=1)
+
+    def episodes(tmdb_id):
+        raise TmdbError("rate limited", 429)
+
+    assert record(conn, CONFIG, NOW, episodes=episodes) == []
+    assert counts(record(conn, CONFIG, NOW, episodes={1: 1}.get)) == {"watched": 1}
 
 
 @pytest.mark.parametrize(

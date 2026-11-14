@@ -29,6 +29,8 @@ SHOW = {
     "first_air_date": "2022-02-17",
     "vote_count": 2000,
     "vote_average": 8.4,
+    "number_of_episodes": 19,
+    "status": "Ended",
     "content_ratings": {"results": [{"iso_3166_1": "US", "rating": "TV-MA"}]},
 }
 
@@ -106,6 +108,29 @@ def test_details_missing_title_is_none(tmdb):
     respx.get(f"{URL}/movie/603").respond(404, json={"status_code": 34})
 
     assert tmdb.details("movie", 603) is None
+
+
+@respx.mock
+def test_episodes(tmdb):
+    respx.get(f"{URL}/tv/95396").respond(json=SHOW)
+    respx.get(f"{URL}/tv/1").respond(json=SHOW | {"number_of_episodes": None})
+    respx.get(f"{URL}/tv/2").respond(json=SHOW | {"status": "Returning Series"})
+    respx.get(f"{URL}/tv/3").respond(404, json={"status_code": 34})
+    respx.get(f"{URL}/tv/4").respond(json=SHOW | {"status": "Canceled"})
+
+    assert tmdb.details("tv", 95396).episodes == 19
+    assert [tmdb.episodes(i) for i in (95396, 1, 2, 3, 4)] == [19, None, None, None, 19]
+
+
+@respx.mock
+def test_episodes_share_the_details_cache(conn):
+    route = respx.get(f"{URL}/tv/95396").respond(json=SHOW)
+    tmdb = Tmdb("token", cache=TmdbCache(conn))
+
+    tmdb.details("tv", 95396)
+
+    assert tmdb.episodes(95396) == 19
+    assert route.call_count == 1
 
 
 @respx.mock
