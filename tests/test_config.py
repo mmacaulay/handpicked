@@ -137,6 +137,34 @@ def test_env_overrides_file_settings(tmp_path):
     assert config.schedule == "0 7 * * SAT"
 
 
+def test_min_seeds_from_env_keeps_the_files_other_thresholds(tmp_path):
+    text = MINIMAL + "thresholds: {min_seeds: 4, completion_pct: 70}\n"
+
+    config = load_config(write(tmp_path, text), environ={"HANDPICKED_MIN_SEEDS": "2"})
+
+    assert config.thresholds.min_seeds == 2
+    assert config.thresholds.completion_pct == 70
+
+
+def test_a_blank_min_seeds_field_leaves_the_files_setting(tmp_path):
+    text = MINIMAL + "thresholds: {min_seeds: 2}\n"
+
+    config = load_config(write(tmp_path, text), environ={"HANDPICKED_MIN_SEEDS": ""})
+
+    assert config.thresholds.min_seeds == 2
+    assert load_config(write(tmp_path, MINIMAL), environ={}).thresholds.min_seeds == 3
+
+
+@pytest.mark.parametrize("value", ["0", "two"])
+def test_an_invalid_min_seeds_field_is_named(tmp_path, value):
+    with pytest.raises(ConfigError) as raised:
+        load_config(
+            tmp_path / "config.yml", environ=ENVIRON | {"HANDPICKED_MIN_SEEDS": value}
+        )
+
+    assert "- thresholds.min_seeds: " in str(raised.value)
+
+
 def test_missing_settings_are_named_as_in_the_template(tmp_path):
     environ = {"HANDPICKED_TAUTULLI_URL": "http://tautulli:8181"}
 

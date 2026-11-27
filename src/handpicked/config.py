@@ -31,6 +31,7 @@ ENV_VARS = {
     "HANDPICKED_PLEX_TOKEN": ("services", "plex", "token"),
     "HANDPICKED_SCHEDULE": ("schedule",),
     "HANDPICKED_PICKS_PER_RUN": ("picks_per_run",),
+    "HANDPICKED_MIN_SEEDS": ("thresholds", "min_seeds"),
     "HANDPICKED_SMTP_HOST": ("digest", "host"),
     "HANDPICKED_SMTP_USERNAME": ("digest", "username"),
     "HANDPICKED_SMTP_PASSWORD": ("digest", "password"),
