@@ -31,6 +31,7 @@
     <Config Name="Digest recipients" Target="HANDPICKED_DIGEST_RECIPIENTS" Default="" Description="Where the digest goes, comma-separated" Type="Variable" Display="always" Required="false" Mask="false"/>
     <Config Name="Schedule" Target="HANDPICKED_SCHEDULE" Default="0 9 * * SUN" Description="Cron expression, in the server's time zone. Name the day of the week (SUN, MON-FRI), not a number." Type="Variable" Display="advanced" Required="false" Mask="false">0 9 * * SUN</Config>
     <Config Name="Picks per run" Target="HANDPICKED_PICKS_PER_RUN" Default="3" Description="Picks for each included user per run" Type="Variable" Display="advanced" Required="false" Mask="false">3</Config>
+    <Config Name="Minimum seeds" Target="HANDPICKED_MIN_SEEDS" Default="" Description="Titles a user must have finished recently (90 days by default) to get picks. Leave blank for 3, or for min_seeds in config.yml." Type="Variable" Display="advanced" Required="false" Mask="false"/>
     <Config Name="PUID" Target="PUID" Default="99" Description="User the container runs as, and owner of the appdata folder" Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
     <Config Name="PGID" Target="PGID" Default="100" Description="Group the container runs as" Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
 </Container>
