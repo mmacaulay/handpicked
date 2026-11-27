@@ -31,8 +31,9 @@ def pick(conn, tmdb_id, media_type="movie", status="available", available=0, use
             """
             INSERT INTO suggestions (
                 user_id, media_type, tmdb_id, title, score, seeds, status,
-                proposed_at, requested_at, available_at, ignored_at
-            ) VALUES (?, ?, ?, 'Pick', 1, '[]', ?, 0, 0, ?, ?)
+                proposed_at, requested_at, available_at, ignored_at,
+                abandoned_at
+            ) VALUES (?, ?, ?, 'Pick', 1, '[]', ?, 0, 0, ?, ?, ?)
             """,
             (
                 user_id,
@@ -41,6 +42,7 @@ def pick(conn, tmdb_id, media_type="movie", status="available", available=0, use
                 status,
                 NOW - available * WEEK,
                 NOW - WEEK if status == "ignored" else None,
+                NOW - WEEK if status == "abandoned" else None,
             ),
         )
 
@@ -202,6 +204,79 @@ def test_an_ignored_pick_started_later_is_settled(conn):
     assert [r["ignored_at"] for r in ignored_at] == [NOW - WEEK] * 3
 
 
+@pytest.mark.parametrize("media_type", ["movie", "tv"])
+def test_an_abandoned_pick_finished_later_is_watched(conn, media_type):
+    pick(conn, 1, media_type, status="abandoned", available=10)
+    episode = None if media_type == "movie" else 1
+    view(conn, 1, 9, percent=40, episode=episode)
+    view(conn, 1, 0, episode=episode)  # finished, after the abandon
+
+    assert counts(record(conn, CONFIG, NOW, episodes={1: 1}.get)) == {"watched": 1}
+    assert outcomes(conn) == {(media_type, 1): "watched"}
+    row = conn.execute("SELECT abandoned_at, watched_at FROM suggestions").fetchone()
+    assert (row["abandoned_at"], row["watched_at"]) == (NOW - WEEK, NOW)
+
+
+def test_an_abandoned_pick_resumed_waits_until_abandoned_again(conn):
+    pick(conn, 1, status="abandoned", available=10)
+    view(conn, 1, 9, percent=40)
+    view(conn, 1, 0.5, percent=60)  # came back, didn't finish
+
+    assert counts(record(conn, CONFIG, NOW)) == {"resumed": 1}
+    assert outcomes(conn) == {("movie", 1): "available"}
+    row = conn.execute("SELECT available_at, abandoned_at FROM suggestions").fetchone()
+    assert (row["available_at"], row["abandoned_at"]) == (NOW - 10 * WEEK, NOW - WEEK)
+
+    # The window counts again from the latest viewing.
+    assert counts(record(conn, CONFIG, NOW + 1.4 * WEEK)) == {}
+    assert counts(record(conn, CONFIG, NOW + 1.5 * WEEK)) == {"abandoned": 1}
+    assert conn.execute("SELECT abandoned_at FROM suggestions").fetchone()[0] == (
+        NOW + 1.5 * WEEK
+    )
+
+
+def test_an_abandoned_pick_with_no_new_viewings_stays_abandoned(conn):
+    pick(conn, 1, status="abandoned", available=10)
+    view(conn, 1, 9, percent=40)
+    pick(conn, 2, "tv", status="abandoned", available=10)
+    view(conn, 2, 9, episode=1)
+
+    def episodes(tmdb_id):
+        raise TmdbError("rate limited", 429)
+
+    assert record(conn, CONFIG, NOW, episodes=episodes) == []
+    assert record(conn, CONFIG, NOW, episodes={2: 10}.get) == []
+    assert set(outcomes(conn).values()) == {"abandoned"}
+
+
+def test_a_resumed_show_waits_until_abandoned_again(conn):
+    pick(conn, 1, "tv", status="abandoned", available=10)
+    view(conn, 1, 9, episode=1)
+    view(conn, 1, 0.5, episode=2)  # came back for one more
+
+    assert counts(record(conn, CONFIG, NOW, episodes={1: 10}.get)) == {"resumed": 1}
+    assert counts(record(conn, CONFIG, NOW + 3.5 * WEEK, episodes={1: 10}.get)) == {
+        "abandoned": 1
+    }
+
+
+def test_a_wider_abandon_window_doesnt_reopen_an_abandoned_pick(conn):
+    pick(conn, 1, status="abandoned", available=10)
+    view(conn, 1, 3, percent=40)  # abandoned 2 weeks later, at NOW - 1 week
+    outcomes_config = CONFIG.outcomes.model_copy(update={"movie_abandon_weeks": 4})
+    wider = CONFIG.model_copy(update={"outcomes": outcomes_config})
+
+    assert record(conn, wider, NOW) == []
+
+
+def test_a_dry_run_reports_a_resumed_pick_without_recording_it(conn):
+    pick(conn, 1, status="abandoned", available=10)
+    view(conn, 1, 0, percent=60)
+
+    assert counts(record(conn, CONFIG, NOW, dry_run=True)) == {"resumed": 1}
+    assert outcomes(conn) == {("movie", 1): "abandoned"}
+
+
 def test_watching_before_the_run_noticed_it_counts(conn):
     # Requested at 0, so a viewing before available_at but after the request
     # is a viewing of the pick.
@@ -281,6 +356,20 @@ def test_landed_groups_this_runs_changes_and_totals_by_member(conn):
     assert user8.available == []
     assert user8.outcomes == [changes[3], changes[4]]
     assert user8.hit_rate is None  # nothing recorded yet, e.g. a dry run
+
+
+def test_landed_shows_a_resumed_pick_and_leaves_it_out_of_the_totals(conn):
+    pick(conn, 1, status="abandoned", available=10)
+    pick(conn, 2, status="watched")
+    view(conn, 1, 0, percent=60)
+
+    changes = record(conn, CONFIG, NOW)
+    (user7,) = landed(conn, changes)
+
+    assert [(c.tmdb_id, c.status) for c in user7.outcomes] == [(1, "resumed")]
+    assert user7.available == []
+    assert user7.totals == {"watched": 1}
+    assert user7.hit_rate == 1
 
 
 def test_landed_is_empty_with_nothing_to_report(conn):

@@ -18,6 +18,9 @@ from handpicked.tmdb import TmdbError
 
 WEEK = 7 * DAY
 OUTCOMES = ("watched", "abandoned", "ignored")
+# Not a status: an abandoned pick the member came back to. Its row goes back
+# to available, but it isn't reported as newly available.
+RESUMED = "resumed"
 
 
 @dataclass
@@ -26,7 +29,7 @@ class Landed:
 
     username: str
     available: list[Change]  # since the last run, without an outcome yet
-    outcomes: list[Change]  # since the last run
+    outcomes: list[Change]  # since the last run, and picks resumed
     totals: Counter[str]  # every outcome recorded so far
 
     @property
@@ -43,14 +46,17 @@ def record(
     delivering: bool = False,
     episodes: Episodes | None = None,
 ) -> list[Change]:
-    """Settle available picks from watch history, and recheck ignored ones.
-    With `delivering` (Plex configured), a pick is only ignored once it's been
-    in the member's row for the ignore window. `episodes` counts a short show
-    finished below the minimum. A dry run returns the outcomes without
-    recording them."""
+    """Settle available picks from watch history, and recheck ignored and
+    abandoned ones. With `delivering` (Plex configured), a pick is only
+    ignored once it's been in the member's row for the ignore window.
+    `episodes` counts a short show finished below the minimum. A dry run
+    returns the outcomes without recording them."""
     changes: list[Change] = []
     rows = conn.execute(
-        "SELECT * FROM suggestions WHERE status IN ('available', 'ignored')"
+        """
+        SELECT * FROM suggestions
+        WHERE status IN ('available', 'ignored', 'abandoned')
+        """
     ).fetchall()
     titles: dict[int, dict[tuple[str, int], list[Viewing]]] = {}
     for row in rows:
@@ -65,11 +71,26 @@ def record(
             if v.stopped >= row["requested_at"]
         ]
         outcome = _outcome(row, item, config, now, delivering, episodes)
-        if outcome is not None and outcome != row["status"]:
+        if row["status"] == "abandoned":
+            # Only finishing it or coming back to it undoes an abandon. A
+            # viewing since is needed, so a wider window doesn't reopen it.
+            back = item and item[-1].stopped > row["abandoned_at"]
+            if outcome == "watched":
+                changes.append(Change.of(row, outcome))
+            elif back and not _abandoned(row, item, config, now):
+                changes.append(Change.of(row, RESUMED))
+        elif outcome is not None and outcome != row["status"]:
             changes.append(Change.of(row, outcome))
 
     if not dry_run:
-        write_statuses(conn, changes, now)
+        write_statuses(conn, [c for c in changes if c.status != RESUMED], now)
+        with conn:
+            # available_at is kept, so the abandon window still can't start
+            # before the title arrived.
+            conn.executemany(
+                "UPDATE suggestions SET status = 'available' WHERE id = ?",
+                [(c.row_id,) for c in changes if c.status == RESUMED],
+            )
     return changes
 
 
@@ -85,7 +106,7 @@ def landed(conn: sqlite3.Connection, changes: list[Change]) -> list[Landed]:
         """
     ):
         totals[row["user_id"]][row["status"]] = row["n"]
-    settled = [c for c in changes if c.status in OUTCOMES]
+    settled = [c for c in changes if c.status in (*OUTCOMES, RESUMED)]
     # A pick that became available and settled in one run is shown settled.
     done = {c.row_id for c in settled}
     available = [c for c in changes if c.status == "available" and c.row_id not in done]
@@ -142,10 +163,18 @@ def _outcome(
             if enough_episodes(finished, row["tmdb_id"], thresholds, episodes):
                 return "watched"
         except TmdbError:
-            # Abandoned is final, so not settled until TMDB can say.
+            # Not settled until TMDB can say, rather than abandoned meanwhile.
             return None
+    return "abandoned" if _abandoned(row, item, config, now) else None
+
+
+def _abandoned(row: sqlite3.Row, item: list[Viewing], config: Config, now: int) -> bool:
+    """Whether the member hasn't returned to the started pick for the abandon
+    window."""
+    windows = config.outcomes
+    movie = row["media_type"] == "movie"
     weeks = windows.movie_abandon_weeks if movie else windows.tv_abandon_weeks
     # A partly available show can be started before season 1 is all there,
     # and the member can't return until it is.
     last = max(item[-1].stopped, row["available_at"])
-    return "abandoned" if now - last >= weeks * WEEK else None
+    return now - last >= weeks * WEEK

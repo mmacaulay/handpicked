@@ -66,6 +66,8 @@ def _deliver(
         WHERE (
             delivered_at IS NULL
             AND status IN ('requested', 'approved', 'available')
+            -- Resumed after it was abandoned: the member is already on it.
+            AND abandoned_at IS NULL
         ) OR (delivered_at IS NOT NULL AND undelivered_at IS NULL)
         ORDER BY id
         """

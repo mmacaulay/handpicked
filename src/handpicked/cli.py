@@ -279,7 +279,8 @@ def _run_steps(
     counts = Counter(c.status for c in settled)
     print(
         f"Outcomes since last run: {counts['watched']} watched,"
-        f" {counts['abandoned']} abandoned, {counts['ignored']} ignored"
+        f" {counts['abandoned']} abandoned, {counts['ignored']} ignored,"
+        f" {counts['resumed']} resumed"
     )
 
     household = users.discover(conn, tautulli)
