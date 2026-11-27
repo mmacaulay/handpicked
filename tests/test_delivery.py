@@ -435,6 +435,18 @@ def test_a_pick_settled_before_delivery_is_left_alone(conn):
     assert plex.writes == [] and describe(result, {}, dry_run=False) == []
 
 
+def test_a_resumed_pick_never_delivered_is_left_alone(conn):
+    pick(conn, 1)
+    with conn:
+        conn.execute("UPDATE suggestions SET abandoned_at = 1")
+    plex = FakePlex({1: [Item("1", "50")]}, {"100": set()})
+
+    result = deliver(conn, plex, ON_HOME, [], NOW, dry_run=False)
+
+    assert plex.writes == [] and describe(result, {}, dry_run=False) == []
+    assert delivery_times(conn) == {1: (None, None)}
+
+
 def test_a_dry_run_uses_this_runs_changes_and_writes_nothing(conn):
     # Neither change is recorded in a dry run.
     became_available = pick(conn, 1, "approved")
